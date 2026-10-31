@@ -20,6 +20,8 @@ export class GridShiftMain {
         this.stats = { linesCleared: 0, maxCombo: 0, totalCrystalsEarned: 0 };
         this.statHistory = [];
         this.achievementsUnlocked = {};
+        this.cloudCarry = 0;
+        this.cloudBonusEarned = 0;
         this.theme = 'classic'; // 'classic', 'vaporwave', 'cyberpunk'
         this.unlockedThemes = { classic: true, vaporwave: false, cyberpunk: false };
         this.muted = false;
@@ -296,10 +298,10 @@ export class GridShiftMain {
         
         const baseCrystals = this.model.score <= 0 ? 0 : Math.min(50, Math.max(1, Math.floor(this.model.score / 650)));
         const skyHavenBonus = this.islandLevels[0] || 0;
-        const cloudCityBonusRate = 1 + 0.05 * (this.islandLevels[2] || 0);
+        this.cloudBonusEarned = 0;
         const multiplier = this.mode === 'daily' ? 2 : 1;
         this.crystalsEarned = baseCrystals > 0
-            ? Math.floor((baseCrystals + skyHavenBonus) * multiplier * cloudCityBonusRate)
+            ? this.applyCloudBonus((baseCrystals + skyHavenBonus) * multiplier)
             : 0;
         
         this.crystals += this.crystalsEarned;
@@ -335,6 +337,16 @@ export class GridShiftMain {
     }
 
     islandCost(level) { return 3 + level * 2; }
+
+    applyCloudBonus(amount) {
+        const percent = 5 * (this.islandLevels[2] || 0);
+        if (percent <= 0) return amount;
+        const total = amount * percent + (this.cloudCarry || 0);
+        const whole = Math.floor(total / 100);
+        this.cloudCarry = total % 100;
+        this.cloudBonusEarned = whole;
+        return amount + whole;
+    }
 
     goHome() {
         this.screen = 'home';
@@ -451,6 +463,7 @@ export class GridShiftMain {
                 totalCrystalsEarned: Number(data.stats?.totalCrystalsEarned) || 0
             };
             this.achievementsUnlocked = data.achievementsUnlocked || {};
+            this.cloudCarry = Math.max(0, Math.min(99, Math.floor(Number(data.cloudCarry) || 0)));
             this.theme = ['classic', 'vaporwave', 'cyberpunk'].includes(data.theme) ? data.theme : 'classic';
             this.unlockedThemes = { classic: true, ...(data.unlockedThemes || {}) };
         } catch (error) {
@@ -467,6 +480,7 @@ export class GridShiftMain {
                 islandLevels: this.islandLevels,
                 stats: this.stats,
                 achievementsUnlocked: this.achievementsUnlocked,
+                cloudCarry: this.cloudCarry,
                 theme: this.theme,
                 unlockedThemes: this.unlockedThemes
             }));
