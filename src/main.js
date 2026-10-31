@@ -14,6 +14,10 @@ const audio = new GridShiftAudio();
 audio.init(container);
 const game = new GridShiftMain(model, audio, container);
 
+['touchend', 'pointerup'].forEach(type => {
+    document.addEventListener(type, () => audio.resumeContext(), { passive: true });
+});
+
 let previous = 0;
 function frame(timestamp) {
     const delta = previous ? Math.min((timestamp - previous) / 1000, 0.1) : 0;
@@ -24,7 +28,8 @@ function frame(timestamp) {
 }
 requestAnimationFrame(frame);
 
-if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+// Offline caching is only for the standalone site; portals host the game in their own iframe.
+if ('serviceWorker' in navigator && location.protocol !== 'file:' && window.self === window.top) {
     window.addEventListener('load', () => {
         navigator.serviceWorker.register('./sw.js').catch(error => {
             console.warn('GridShift offline support unavailable:', error);

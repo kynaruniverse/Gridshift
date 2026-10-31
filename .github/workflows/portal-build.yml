@@ -1,0 +1,28 @@
+name: Portal build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  zip:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm run check
+      - run: npm test
+      - name: Build portal zip
+        run: |
+          mkdir -p dist
+          zip -r dist/gridshift-portal.zip index.html styles.css manifest.json sw.js src assets
+          size=$(stat -c%s dist/gridshift-portal.zip)
+          echo "Zip size: $size bytes"
+          test "$size" -lt 8000000
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gridshift-portal
+          path: dist/gridshift-portal.zip

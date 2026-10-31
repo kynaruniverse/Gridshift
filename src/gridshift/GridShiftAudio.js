@@ -89,6 +89,14 @@ export class GridShiftAudio {
         this.setComboIntensity(comboCount);
     }
 
+    // iOS can leave the context "interrupted" after a call or app switch, and resume()
+    // only works inside a user gesture, so main.js calls this on every touch release.
+    resumeContext() {
+        const context = this._context;
+        if (!context || this._muted) return;
+        if (context.state === 'suspended' || context.state === 'interrupted') context.resume().catch(() => {});
+    }
+
     _playTone(startFrequency, duration, peakGain, endFrequency = startFrequency) {
         if (this._muted) return;
         const context = this._ensureContext();

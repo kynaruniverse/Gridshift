@@ -414,16 +414,22 @@ export class GridShiftMain {
         const key = this.runDailyKey || this.dailyKey();
         const streak = this.currentStreak();
         const text = `GridShift Daily ${key}\n${this.model.score} pts${streak > 1 ? ` · ${streak}-day streak` : ''}\nCan you beat it?`;
-        const url = location.href.split('#')[0];
+        // Inside a portal iframe the page address isn't the game's public link, so share text only.
+        const url = window.self === window.top ? location.href.split('#')[0] : '';
+        const payload = url ? { title: 'GridShift Daily', text, url } : { title: 'GridShift Daily', text };
         try {
             if (navigator.share) {
-                await navigator.share({ title: 'GridShift Daily', text, url });
+                await navigator.share(payload);
                 return;
             }
-            await navigator.clipboard.writeText(`${text}\n${url}`);
+        } catch (error) {
+            if (error?.name === 'AbortError') return;
+        }
+        try {
+            await navigator.clipboard.writeText(url ? `${text}\n${url}` : text);
             this.setStatus('Result copied to clipboard.', 2);
         } catch (error) {
-            if (error?.name !== 'AbortError') this.setStatus('Could not share on this device.', 2);
+            this.setStatus('Could not share on this device.', 2);
         }
     }
 
