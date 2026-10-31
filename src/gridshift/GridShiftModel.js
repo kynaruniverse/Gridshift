@@ -25,6 +25,9 @@ export class GridShiftModel {
         [{ x: 1, y: 0 }, { x: 2, y: 0 }, { x: 0, y: 1 }, { x: 1, y: 1 }, { x: 0, y: 2 }]
     ];
     static COLOR_IDS = 6;
+    static BOMB_RADIUS = 1;
+    // One weight per entry in SHAPES, same order. Higher means more common.
+    static SHAPE_WEIGHTS = [3, 5, 5, 5, 6, 4, 4, 4, 3, 3, 2, 2, 2, 4, 2, 2, 2];
 
     constructor() {
         this.board = [];
@@ -60,6 +63,65 @@ export class GridShiftModel {
     }
 
     _dealTray() {
+        for (let attempt = 0; attempt < 25; attempt++) {
+            this.tray = this._rollTray();
+            if (this.canAnyPieceFit()) return;
+        }
+        const keep = this.tray[0];
+        this.tray[0] = {
+            cells: JSON.parse(JSON.stringify(GridShiftModel.SHAPES[0])),
+            color: keep.color,
+            special: GridShiftModel.SPECIAL_NONE,
+            used: false
+        };
+    }
+
+    _random() {
+        return (this.rng || Math.random)();
+    }
+
+    _pickShapeIndex(crowd, taken) {
+        const shapes = GridShiftModel.SHAPES;
+        const weights = shapes.map((shape, index) => {
+            if (taken.has(index)) return 0;
+            let weight = GridShiftModel.SHAPE_WEIGHTS[index] ?? 3;
+            if (shape.length >= 5) weight *= Math.max(0.2, 1 - crowd * 0.8);
+            else if (shape.length <= 2) weight *= 1 + crowd;
+            return weight;
+        });
+        let roll = this._random() * weights.reduce((sum, w) => sum + w, 0);
+        let last = 0;
+        for (let i = 0; i < weights.length; i++) {
+            if (weights[i] <= 0) continue;
+            last = i;
+            roll -= weights[i];
+            if (roll < 0) return i;
+        }
+        return last;
+    }
+
+    _rollTray() {
+        let filled = 0;
+        for (const row of this.board) for (const cell of row) if (cell !== -1) filled++;
+        const crowd = filled / (GridShiftModel.SIZE * GridShiftModel.SIZE);
+        const taken = new Set();
+        const tray = [];
+        for (let i = 0; i < 3; i++) {
+            const shapeIndex = this._pickShapeIndex(crowd, taken);
+            taken.add(shapeIndex);
+            let special = GridShiftModel.SPECIAL_NONE;
+            if (this._random() < 0.05) special = Math.floor(this._random() * 3) + 1;
+            tray.push({
+                cells: JSON.parse(JSON.stringify(GridShiftModel.SHAPES[shapeIndex])),
+                color: Math.floor(this._random() * GridShiftModel.COLOR_IDS),
+                special,
+                used: false
+            });
+        }
+        return tray;
+    }
+
+    _legacyDealTray() {
         this.tray = [];
         for (let i = 0; i < 3; i++) {
             const shapeIndex = Math.floor(Math.random() * GridShiftModel.SHAPES.length);
@@ -131,7 +193,7 @@ export class GridShiftModel {
             this.board[cell.y][cell.x] = color;
             placedCells.push(cell);
         }
-        const pivot = placedCells[Math.floor((placedCells.length - 1) * 0.5)];
+        const pivot = this._pivot(placedCells);
         const special = piece.special;
         if (special !== GridShiftModel.SPECIAL_NONE) {
             this.specialBoard[pivot.y][pivot.x] = special;
@@ -141,7 +203,7 @@ export class GridShiftModel {
 
         let specialCleared = 0;
         if (special === GridShiftModel.SPECIAL_BOMB) {
-            specialCleared = this._clearArea(pivot, 1);
+            specialCleared = this._clearArea(pivot, GridShiftModel.BOMB_RADIUS);
         } else if (special === GridShiftModel.SPECIAL_LIGHTNING) {
             specialCleared = this._clearCross(pivot);
         } else if (special === GridShiftModel.SPECIAL_PRISM) {
@@ -270,6 +332,57 @@ export class GridShiftModel {
             this.specialBoard[y][x] = GridShiftModel.SPECIAL_NONE;
         }
         return { lines: fullRows.length + fullCols.length, cells: cleared.size };
+    }
+
+    _pivot(placedCells) {
+        return placedCells[Math.floor((placedCells.length - 1) * 0.5)];
+    }
+
+    previewPlacement(slot, origin) {
+        const piece = this.tray[slot];
+        if (!piece || piece.used || !this.canPlace(piece.cells, origin)) return null;
+        const size = GridShiftModel.SIZE;
+        const placed = piece.cells.map(c => ({ x: origin.x + c.x, y: origin.y + c.y }));
+        const placedKeys = new Set(placed.map(c => `${c.x},${c.y}`));
+        const sim = new GridShiftModel();
+        sim.board = this.board.map(row => row.slice());
+        sim.specialBoard = this.specialBoard.map(row => row.slice());
+        for (const c of placed) sim.board[c.y][c.x] = piece.color;
+        const withPiece = sim.board.map(row => row.slice());
+        const pivot = this._pivot(placed);
+        const area = [];
+        const addArea = (x, y) => {
+            if (!area.some(a => a.x === x && a.y === y)) area.push({ x, y });
+        };
+        if (piece.special === GridShiftModel.SPECIAL_BOMB) {
+            const r = GridShiftModel.BOMB_RADIUS;
+            sim._clearArea(pivot, r);
+            for (let y = Math.max(0, pivot.y - r); y <= Math.min(size - 1, pivot.y + r); y++) {
+                for (let x = Math.max(0, pivot.x - r); x <= Math.min(size - 1, pivot.x + r); x++) addArea(x, y);
+            }
+        } else if (piece.special === GridShiftModel.SPECIAL_LIGHTNING) {
+            sim._clearCross(pivot);
+            for (let x = 0; x < size; x++) addArea(x, pivot.y);
+            for (let y = 0; y < size; y++) addArea(pivot.x, y);
+        } else if (piece.special === GridShiftModel.SPECIAL_PRISM) {
+            sim._prismCompleteGaps(placed, piece.color);
+        }
+        const afterSpecial = sim.board.map(row => row.slice());
+        const lineData = sim._clearFullLines();
+        const hits = [];
+        const gaps = [];
+        const lineCells = [];
+        for (let y = 0; y < size; y++) {
+            for (let x = 0; x < size; x++) {
+                const wasFilled = withPiece[y][x] !== -1;
+                const midFilled = afterSpecial[y][x] !== -1;
+                const endFilled = sim.board[y][x] !== -1;
+                if (wasFilled && !midFilled && !placedKeys.has(`${x},${y}`)) hits.push({ x, y });
+                if (!wasFilled && midFilled) gaps.push({ x, y });
+                if (midFilled && !endFilled) lineCells.push({ x, y });
+            }
+        }
+        return { lines: lineData.lines, lineCells, area, hits, gaps };
     }
 
     canAnyPieceFit() {

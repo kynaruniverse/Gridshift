@@ -25,6 +25,9 @@ export class GridShiftMain {
         this.theme = 'classic'; // 'classic', 'vaporwave', 'cyberpunk'
         this.unlockedThemes = { classic: true, vaporwave: false, cyberpunk: false };
         this.muted = false;
+        this.tutorialDone = false;
+        this.seenSpecials = {};
+        this.tutorialStep = -1;
 
         this.runFinalized = false;
         this.dragIndex = -1;
@@ -187,6 +190,7 @@ export class GridShiftMain {
         else if (name === 'start_fever') this.startRun('fever');
         else if (name === 'start_daily') this.startRun('daily');
         else if (name === 'open_islands') this.screen = 'islands';
+        else if (name === 'tutorial_skip') this.endTutorial();
         else if (name === 'toggle_theme') {
             const themes = ['classic', 'vaporwave', 'cyberpunk'];
             const nextIdx = (themes.indexOf(this.theme) + 1) % themes.length;
@@ -252,6 +256,7 @@ export class GridShiftMain {
         const excess = this.statHistory.length - this.model.history.length;
         if (excess > 0) this.statHistory.splice(0, excess);
         this.animatePlacedCells(placedCells, pieceColor, releaseLayout);
+        this.tutorialAdvance('placed');
         const clearedCells = this.findClearedCells(beforeBoard, placedCells, pieceColor);
         if (clearedCells.length) this.spawnClearParticles(clearedCells);
         if (outcome.special) {
@@ -261,6 +266,7 @@ export class GridShiftMain {
         if (outcome.lines > 0) {
             this.audio.playClear(outcome.combo, outcome.lines);
             this.showPraise(outcome.lines, outcome.combo);
+            this.tutorialAdvance('cleared');
             this.stats.linesCleared += outcome.lines;
             this.stats.maxCombo = Math.max(this.stats.maxCombo, outcome.combo);
             if (outcome.lines >= 2 || outcome.combo >= 3) {
@@ -289,12 +295,14 @@ export class GridShiftMain {
         this.modal = '';
         this.audio.unlockAndPlay();
         this.audio.setComboIntensity(0);
-        this.setStatus('Drag pieces onto the board. Clear lines to make space.', 3.2);
+        this.tutorialStep = (!this.tutorialDone && mode === 'classic') ? 0 : -1;
+        if (this.tutorialStep < 0) this.setStatus('Drag pieces onto the board. Clear lines to make space.', 3.2);
     }
 
     finishRun(reason) {
         if (this.runFinalized) return;
         this.runFinalized = true;
+        if (this.tutorialStep >= 0) this.endTutorial();
         
         const baseCrystals = this.model.score <= 0 ? 0 : Math.min(50, Math.max(1, Math.floor(this.model.score / 650)));
         const skyHavenBonus = this.islandLevels[0] || 0;
@@ -337,6 +345,35 @@ export class GridShiftMain {
     }
 
     islandCost(level) { return 3 + level * 2; }
+
+    checkSpecialTips() {
+        if (this.screen !== 'game' || this.modal || this.tutorialStep >= 0 || this.statusTimer > 0) return;
+        const tips = {
+            1: 'Bomb: clears a 3×3 area around its middle.',
+            2: 'Lightning: clears the row and column through it.',
+            3: 'Prism: fills gaps in nearly full lines it touches.'
+        };
+        for (const piece of this.model.tray) {
+            if (!piece || piece.used || !piece.special || this.seenSpecials[piece.special]) continue;
+            this.seenSpecials[piece.special] = true;
+            this.setStatus(tips[piece.special], 4.5);
+            this.saveProfile();
+            return;
+        }
+    }
+
+    tutorialAdvance(event) {
+        if (this.tutorialStep < 0) return;
+        if (this.tutorialStep === 0 && event === 'placed') this.tutorialStep = 1;
+        else if (this.tutorialStep === 1 && event === 'cleared') this.tutorialStep = 2;
+        else if (this.tutorialStep === 2 && event === 'placed') this.endTutorial();
+    }
+
+    endTutorial() {
+        this.tutorialStep = -1;
+        this.tutorialDone = true;
+        this.saveProfile();
+    }
 
     applyCloudBonus(amount) {
         const percent = 5 * (this.islandLevels[2] || 0);
@@ -465,6 +502,8 @@ export class GridShiftMain {
             this.achievementsUnlocked = data.achievementsUnlocked || {};
             this.cloudCarry = Math.max(0, Math.min(99, Math.floor(Number(data.cloudCarry) || 0)));
             this.theme = ['classic', 'vaporwave', 'cyberpunk'].includes(data.theme) ? data.theme : 'classic';
+            this.tutorialDone = data.tutorialDone === true || Object.values(this.bestScores).some(score => score > 0);
+            this.seenSpecials = data.seenSpecials && typeof data.seenSpecials === 'object' ? data.seenSpecials : {};
             this.unlockedThemes = { classic: true, ...(data.unlockedThemes || {}) };
         } catch (error) {
             console.warn('Could not load GridShift profile:', error);
@@ -482,7 +521,9 @@ export class GridShiftMain {
                 achievementsUnlocked: this.achievementsUnlocked,
                 cloudCarry: this.cloudCarry,
                 theme: this.theme,
-                unlockedThemes: this.unlockedThemes
+                unlockedThemes: this.unlockedThemes,
+                tutorialDone: this.tutorialDone,
+                seenSpecials: this.seenSpecials
             }));
         } catch (error) {
             console.warn('Could not save GridShift profile:', error);
@@ -492,6 +533,7 @@ export class GridShiftMain {
     update(delta) {
         this.clock += delta;
         this.statusTimer = Math.max(0, this.statusTimer - delta);
+        this.checkSpecialTips();
         this.shakeTimer = Math.max(0, this.shakeTimer - delta);
         for (const [key, animation] of this.snapAnimations) {
             animation.elapsed += delta;

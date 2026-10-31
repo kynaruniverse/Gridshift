@@ -48,9 +48,25 @@ export const renderMethods = {
         const b=this.boardRect;this.panel({x:b.x-13,y:b.y-13,width:b.width+26,height:b.height+26},p.panel,29,true);c.fillStyle=p.slot;rr(c,b.x,b.y,b.width,b.height,15);c.fill();c.save();rr(c,b.x,b.y,b.width,b.height,15);c.clip();for(let y=0;y<8;y++)for(let x=0;x<8;x++){const px=b.x+x*CELL,py=b.y+y*CELL,val=this.model.board[y][x];if(val>=0){const anim=this.snapAnimations?.get(`${x},${y}`);if(anim){const progress=Math.max(0,Math.min(1,(anim.elapsed-anim.delay)/anim.duration)),t=progress-1,eased=1+2.70158*t*t*t+1.70158*t*t,ax=anim.fromX+(anim.targetX-anim.fromX)*eased,ay=anim.fromY+(anim.targetY-anim.fromY)*eased,size=CELL*(.82+.18*eased);this.drawTile(ax+(CELL-size)/2,ay+(CELL-size)/2,size,anim.color,.6+.4*progress);}else this.drawTile(px,py,CELL,val);}else{c.fillStyle=((x+y)&1)?'rgba(86,123,183,.05)':'rgba(86,123,183,.085)';rr(c,px+4,py+4,CELL-8,CELL-8,14);c.fill();c.strokeStyle='rgba(83,112,169,.075)';c.lineWidth=1;rr(c,px+4,py+4,CELL-8,CELL-8,14);c.stroke();}}c.restore();
         const drag=this.dragIndex>=0?this.dragLayout():null;let dragHint='';if(drag?.overlapsBoard)dragHint=this.drawPlacementPreview(drag,b);
         this.drawParticles(b);
-        this.drawStatus(bottom+40,dragHint||'Drag pieces onto the board. Clear lines to make space.',Boolean(dragHint));
+        if(!dragHint&&this.tutorialStep>=0&&!(this.statusTimer>0&&this.statusMessage))this.drawTutorial(bottom+40);else this.drawStatus(bottom+40,dragHint||'Drag pieces onto the board. Clear lines to make space.',Boolean(dragHint));
         const trayY=860;this.panel({x:30,y:trayY,width:660,height:360},p.panel,28,true);this.text('NEXT PIECES',360,trayY+30,14,p.muted,900);for(let i=0;i<3;i++){const r={x:43+i*212,y:trayY+54,width:202,height:276};this.trayRects.push(r);c.fillStyle=p.slot;rr(c,r.x,r.y,r.width,r.height,20);c.fill();const piece=this.model.tray[i];if(!piece||piece.used){c.globalAlpha=.55;this.text('USED',r.x+r.width/2,r.y+r.height/2,14,p.muted,900);c.globalAlpha=1;continue;}const cols=Math.max(...piece.cells.map(a=>a.x))+1,rows=Math.max(...piece.cells.map(a=>a.y))+1,size=Math.min(50,170/cols,218/rows),ox=r.x+(r.width-cols*size)/2,oy=r.y+24+(218-rows*size)/2;c.save();c.globalAlpha=this.dragIndex===i?.28:1;piece.cells.forEach(a=>this.drawTile(ox+a.x*size,oy+a.y*size,size,piece.color));if(piece.special){const icon=this.assets[`special${piece.special}`];if(icon)c.drawImage(icon,r.x+r.width-42,r.y+7,34,34);}c.restore();}
         this.drawPraise();if(drag&&!drag.overlapsBoard){c.save();c.globalAlpha=.94;drag.piece.cells.forEach(a=>this.drawTile(drag.left+a.x*drag.size,drag.top+a.y*drag.size,drag.size,drag.piece.color));c.restore();}},
+    drawSpecialPreview(sp,b,color,pulse){
+        const c=this.ctx;
+        for(const a of sp.area){c.save();c.globalAlpha=.2+.1*pulse;c.fillStyle='#f19a6e';rr(c,b.x+a.x*CELL+3,b.y+a.y*CELL+3,CELL-6,CELL-6,15);c.fill();c.restore();}
+        for(const a of sp.gaps){const px=b.x+a.x*CELL,py=b.y+a.y*CELL;this.drawTile(px,py,CELL,color,.4+.15*pulse);c.save();c.strokeStyle='#a987db';c.lineWidth=3;c.setLineDash([8,6]);rr(c,px+4,py+4,CELL-8,CELL-8,14);c.stroke();c.restore();}
+    },
+    drawTutorial(y){
+        const c=this.ctx,p=this.palette(),x=36,w=648,h=50;
+        const steps=[['Drag a piece onto the board.','An outline shows where it will land.'],['Fill a whole row or column to clear it.','Gold cells show what will clear.'],['Nice clear! Leave room for the next pieces.','The run ends when none of them fit.']];
+        const lines=steps[this.tutorialStep];if(!lines)return;
+        c.save();c.fillStyle=p.ink;rr(c,x,y-h/2,w,h,20);c.fill();c.restore();
+        this.text(lines[0],x+22,y-10,18,'#fff',800,'left');
+        this.text(lines[1],x+22,y+12,15,'rgba(255,255,255,.78)',700,'left');
+        c.save();c.fillStyle='rgba(255,255,255,.18)';rr(c,x+w-86,y-16,70,32,16);c.fill();c.restore();
+        this.text('SKIP',x+w-51,y,14,'#fff',900);
+        this.buttonHits.tutorial_skip={x:x+w-96,y:y-h/2,width:96,height:h};
+    },
     drawPlacementPreview(drag,b){
         const c=this.ctx,p=this.palette(),cells=drag.piece.cells,o=drag.origin,fit=this.model.canPlace(cells,o),pulse=.5+.5*Math.sin(this.clock*8);
         if(!fit){
@@ -78,9 +94,18 @@ export const renderMethods = {
             if(row){lines++;for(let x=0;x<8;x++)clearing.add(`${x},${i}`);}
             if(col){lines++;for(let y=0;y<8;y++)clearing.add(`${i},${y}`);}
         }
+        const sp=drag.piece.special?this.model.previewPlacement(this.dragIndex,o):null;
+        if(sp){clearing.clear();for(const a of sp.lineCells)clearing.add(`${a.x},${a.y}`);lines=sp.lines;this.drawSpecialPreview(sp,b,drag.piece.color,pulse);}
         for(const key of clearing){const[gx,gy]=key.split(',').map(Number);c.save();c.globalAlpha=.3+.2*pulse;c.fillStyle=p.gold;rr(c,b.x+gx*CELL+3,b.y+gy*CELL+3,CELL-6,CELL-6,15);c.fill();c.restore();}
         for(const a of cells){const px=b.x+(o.x+a.x)*CELL,py=b.y+(o.y+a.y)*CELL;this.drawTile(px,py,CELL,drag.piece.color,.78+.14*pulse);c.save();c.strokeStyle=p.dark;c.lineWidth=3;rr(c,px+4,py+4,CELL-8,CELL-8,14);c.stroke();c.restore();}
         for(const key of clearing){const[gx,gy]=key.split(',').map(Number),cx=b.x+(gx+.5)*CELL,cy=b.y+(gy+.5)*CELL,r=11;c.save();c.globalAlpha=.6+.4*pulse;c.fillStyle='#fff';c.strokeStyle=p.dark;c.lineWidth=2;c.beginPath();c.moveTo(cx,cy-r);c.lineTo(cx+r*.6,cy);c.lineTo(cx,cy+r);c.lineTo(cx-r*.6,cy);c.closePath();c.fill();c.stroke();c.restore();}
+        if(sp){
+            for(const a of sp.hits){c.save();c.beginPath();c.arc(b.x+(a.x+.5)*CELL,b.y+(a.y+.5)*CELL,13,0,Math.PI*2);c.fillStyle='rgba(255,255,255,.92)';c.fill();c.lineWidth=3;c.strokeStyle='#e07b4a';c.stroke();c.restore();}
+            const kind=drag.piece.special,n=sp.hits.length,g=sp.gaps.length,lt=lines>0?`${lines} line${lines===1?'':'s'}`:'';
+            if(kind===3)return g>0?`Prism fills ${g} gap${g===1?'':'s'}${lt?` + ${lt}`:''}.`:(lt?`Clears ${lt}.`:'Prism finds no gaps here.');
+            const name=kind===1?'Bomb':'Lightning';
+            return n>0?`${name} clears ${n} block${n===1?'':'s'}${lt?` + ${lt}`:''}.`:(lt?`Clears ${lt}.`:`${name} has nothing to clear here.`);
+        }
         return lines>0?`Clears ${lines} line${lines===1?'':'s'}.`:'Release to place it.';
     },
     showPraise(lines,combo){this.praise={text:combo>=3?`COMBO ×${combo}`:lines>=4?'INCREDIBLE':lines===3?'AMAZING':lines===2?'NICE CLEAR':'GOOD MOVE',start:this.clock};},
