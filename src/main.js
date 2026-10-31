@@ -1,6 +1,9 @@
 import { GridShiftModel } from './gridshift/GridShiftModel.js';
 import { GridShiftAudio } from './gridshift/GridShiftAudio.js';
 import { GridShiftMain } from './gridshift/GridShiftMain.js';
+import { renderMethods } from './gridshift/GridShiftRender.js';
+
+Object.assign(GridShiftMain.prototype, renderMethods);
 
 const container = document.querySelector('#game-container');
 if (!container) throw new Error('Missing #game-container element');

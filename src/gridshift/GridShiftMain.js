@@ -26,6 +26,7 @@ export class GridShiftMain {
         this.runFinalized = false;
         this.dragIndex = -1;
         this.dragPosition = { x: 0, y: 0 };
+        this.dragLift = 90;
         this.boardRect = { x: 0, y: 0, width: 0, height: 0 };
         this.cellSize = 0;
         this.trayRects = [];
@@ -118,12 +119,31 @@ export class GridShiftMain {
         }
     }
 
+    dragLayout() {
+        const piece = this.model.tray[this.dragIndex];
+        if (!piece || piece.used || !this.cellSize) return null;
+        const size = this.cellSize;
+        const cols = Math.max(...piece.cells.map(c => c.x)) + 1;
+        const rows = Math.max(...piece.cells.map(c => c.y)) + 1;
+        const left = this.dragPosition.x - (cols * size) / 2;
+        const top = this.dragPosition.y - this.dragLift - rows * size;
+        const origin = {
+            x: Math.round((left - this.boardRect.x) / size),
+            y: Math.round((top - this.boardRect.y) / size)
+        };
+        const overlapsBoard = piece.cells.some(c =>
+            origin.x + c.x >= 0 && origin.x + c.x < 8 && origin.y + c.y >= 0 && origin.y + c.y < 8);
+        return { piece, size, left, top, origin, overlapsBoard };
+    }
+
     pointerUp(pos) {
         if (this.dragIndex >= 0) {
             const slot = this.dragIndex;
+            this.dragPosition = pos;
+            const layout = this.dragLayout();
             this.dragIndex = -1;
-            if (this.screen === 'game' && !this.modal && this.isInsideBoard(pos)) {
-                this.placeFromTray(slot, this.boardCellAt(pos));
+            if (this.screen === 'game' && !this.modal && layout && layout.overlapsBoard) {
+                this.placeFromTray(slot, layout.origin);
             }
             return;
         }
@@ -257,6 +277,7 @@ export class GridShiftMain {
         }
         if (outcome.lines > 0) {
             this.audio.playClear(outcome.combo, outcome.lines);
+            this.showPraise(outcome.lines, outcome.combo);
             this.vibrate([40, 50, 40]);
             this.clearFlash = 0.45;
             this.stats.linesCleared += outcome.lines;
@@ -287,6 +308,7 @@ export class GridShiftMain {
         this.vibrate([30, 30]);
         if (result.lines > 0) {
             this.audio.playClear(result.combo, result.lines);
+            this.showPraise(result.lines, result.combo);
             this.vibrate([40, 50, 40]);
             this.clearFlash = 0.45;
             this.setStatus(`Shift cleared ${result.lines} line${result.lines === 1 ? '' : 's'}!`, 1.5);
@@ -456,382 +478,5 @@ export class GridShiftMain {
     triggerShake(duration = 0.3, intensity = 12) {
         this.shakeTimer = duration;
         this.shakeIntensity = intensity;
-    }
-
-    render() {
-        this.ctx.clearRect(0, 0, this.width, this.height);
-        this.buttonHits = {};
-        this.trayRects = [];
-
-        this.ctx.save();
-        if (this.shakeTimer > 0) {
-            const offsetX = (Math.random() - 0.5) * this.shakeIntensity;
-            const offsetY = (Math.random() - 0.5) * this.shakeIntensity;
-            this.ctx.translate(offsetX, offsetY);
-        }
-
-        this.ctx.fillStyle = '#071326';
-        this.ctx.fillRect(0, 0, this.width, this.height);
-        
-        if (this.screen === 'home') {
-            this.renderHome();
-        } else if (this.screen === 'game') {
-            this.renderGame();
-        } else {
-            this.renderIslands();
-        }
-
-        if (this.modal) {
-            this.renderModal();
-        }
-        
-        this.ctx.restore();
-    }
-
-    drawImageCover(image, x, y, width, height) {
-        if (!image) return;
-        const scale = Math.max(width / image.width, height / image.height);
-        const drawWidth = image.width * scale;
-        const drawHeight = image.height * scale;
-        this.ctx.drawImage(image, x + (width - drawWidth) / 2, y + (height - drawHeight) / 2, drawWidth, drawHeight);
-    }
-
-    drawBackdrop(image, alpha = 0.34) {
-        if (!image) return;
-        this.ctx.save();
-        this.ctx.globalAlpha = alpha;
-        this.drawImageCover(image, 0, 0, this.width, this.height);
-        this.ctx.restore();
-    }
-
-    renderHome() {
-        this.drawBackdrop(this.assets.island2, 0.32);
-        this.ctx.fillStyle = 'rgba(3, 11, 27, 0.52)';
-        this.ctx.fillRect(0, 0, this.width, this.height);
-        this.ctx.textAlign = 'center';
-        this.ctx.fillStyle = '#f4f7ff';
-        this.ctx.font = '800 66px system-ui, sans-serif';
-        this.ctx.shadowColor = '#37dff6';
-        this.ctx.shadowBlur = 24;
-        this.ctx.fillText('GRIDSHIFT', 360, 220);
-        this.ctx.shadowBlur = 0;
-        this.ctx.fillStyle = '#77f2ed';
-        this.ctx.font = '700 21px system-ui, sans-serif';
-        this.ctx.fillText('BREAK  •  BUILD  •  SHIFT', 360, 264);
-        this.ctx.fillStyle = '#d6e6f7';
-        this.ctx.font = '20px system-ui, sans-serif';
-        this.ctx.fillText('Place neon-glass shapes. Clear lines. Reshape the board.', 360, 326);
-        this.drawButton('start_classic', { x: 145, y: 395, width: 430, height: 72 }, 'CLASSIC ENDLESS', '#54e5df');
-        this.drawButton('start_fever', { x: 145, y: 478, width: 430, height: 72 }, 'FEVER RUSH · 2 MIN', '#ff76b5');
-        this.drawButton('start_daily', { x: 145, y: 561, width: 430, height: 60 }, '★ DAILY CHALLENGE', '#f3c653');
-        this.drawButton('open_islands', { x: 145, y: 630, width: 430, height: 64 }, 'ISLAND BUILDER', '#927cff');
-        this.drawButton('toggle_theme', { x: 145, y: 704, width: 430, height: 54 }, `THEME: ${this.theme.toUpperCase()}`, '#3b7a82');
-        this.drawButton('sound_toggle', { x: 250, y: 772, width: 220, height: 48 }, this.muted ? 'SOUND OFF' : 'SOUND ON', '#284b75');
-        this.ctx.fillStyle = '#d7e5fa';
-        this.ctx.font = '18px system-ui, sans-serif';
-        this.ctx.fillText(`Best Classic  ${this.bestScores.classic || 0}     ·     Best Fever  ${this.bestScores.fever || 0}`, 360, 890);
-        this.ctx.fillStyle = '#72f0dc';
-        this.ctx.fillText(`Aether Crystals: ${this.crystals}`, 360, 930);
-        this.ctx.fillStyle = '#a4b7d0';
-        this.ctx.font = '16px system-ui, sans-serif';
-        this.ctx.fillText('Tap a game mode to play. Progress is saved on this device.', 360, 1015);
-    }
-
-    renderGame() {
-        this.ctx.fillStyle = '#f1f5ff';
-        this.ctx.textAlign = 'left';
-        this.ctx.font = '700 26px system-ui, sans-serif';
-        this.ctx.fillText(this.mode === 'fever' ? 'FEVER RUSH' : 'CLASSIC ENDLESS', 34, 66);
-        this.ctx.fillStyle = '#b8c9df';
-        this.ctx.font = '17px system-ui, sans-serif';
-        this.ctx.fillText(`SCORE  ${this.model.score}`, 34, 103);
-        if (this.mode === 'fever') this.ctx.fillText(`TIME  ${Math.ceil(this.secondsLeft)}s`, 34, 133);
-        else this.ctx.fillText(`BEST  ${this.bestScores.classic || 0}`, 34, 133);
-        const canUndo = this.model.history.length > 0 && this.crystals >= 2;
-        this.drawButton('undo_move', { x: 474, y: 44, width: 104, height: 50 }, 'UNDO ↺', canUndo ? '#e68a36' : '#324259');
-        this.drawButton('pause', { x: 590, y: 44, width: 96, height: 50 }, 'PAUSE', '#657c9d');
-
-        const boardSize = 560;
-        const frame = { x: 80, y: 185, width: boardSize, height: boardSize };
-        if (this.assets.plate) this.ctx.drawImage(this.assets.plate, frame.x, frame.y, frame.width, frame.height);
-        else {
-            this.ctx.fillStyle = '#122342';
-            this.ctx.fillRect(frame.x, frame.y, frame.width, frame.height);
-        }
-        const inset = 31;
-        const activeSize = boardSize - inset * 2;
-        this.boardRect = { x: frame.x + inset, y: frame.y + inset, width: activeSize, height: activeSize };
-        this.cellSize = activeSize / 8;
-        this.ctx.fillStyle = 'rgba(5, 15, 35, 0.88)';
-        this.ctx.fillRect(this.boardRect.x, this.boardRect.y, activeSize, activeSize);
-        for (let y = 0; y < 8; y++) {
-            for (let x = 0; x < 8; x++) {
-                const px = this.boardRect.x + x * this.cellSize;
-                const py = this.boardRect.y + y * this.cellSize;
-                const val = this.model.board[y][x];
-                if (val >= 0) {
-                    const tile = this.assets[`tile${val % 6}`];
-                    if (tile) {
-                        this.ctx.save();
-                        if (this.theme === 'vaporwave') {
-                            this.ctx.filter = 'hue-rotate(140deg) saturate(1.4)';
-                        } else if (this.theme === 'cyberpunk') {
-                            this.ctx.filter = 'hue-rotate(290deg) contrast(1.3)';
-                        }
-                        this.ctx.drawImage(tile, px + 1, py + 1, this.cellSize - 2, this.cellSize - 2);
-                        this.ctx.restore();
-                    }
-                    else {
-                        this.ctx.fillStyle = '#58e5dc';
-                        this.ctx.fillRect(px + 4, py + 4, this.cellSize - 8, this.cellSize - 8);
-                    }
-                } else {
-                    this.ctx.strokeStyle = 'rgba(148, 185, 223, 0.14)';
-                    this.ctx.lineWidth = 1;
-                    this.ctx.strokeRect(px + 1, py + 1, this.cellSize - 2, this.cellSize - 2);
-                }
-            }
-        }
-
-        // Render Ghost Preview when dragging a piece over the board
-        if (this.dragIndex >= 0 && this.isInsideBoard(this.dragPosition)) {
-            const piece = this.model.tray[this.dragIndex];
-            const origin = this.boardCellAt(this.dragPosition);
-            const canFit = piece && this.model.canPlace(piece.cells, origin);
-            if (piece) {
-                this.ctx.save();
-                this.ctx.globalAlpha = canFit ? 0.45 : 0.2;
-                const ghostTile = this.assets[`tile${piece.color % 6}`];
-                for (const cell of piece.cells) {
-                    const gx = origin.x + cell.x;
-                    const gy = origin.y + cell.y;
-                    if (gx >= 0 && gx < 8 && gy >= 0 && gy < 8) {
-                        const px = this.boardRect.x + gx * this.cellSize;
-                        const py = this.boardRect.y + gy * this.cellSize;
-                        if (ghostTile) {
-                            this.ctx.drawImage(ghostTile, px + 1, py + 1, this.cellSize - 2, this.cellSize - 2);
-                        } else {
-                            this.ctx.fillStyle = canFit ? '#58e5dc' : '#ff4a7c';
-                            this.ctx.fillRect(px + 4, py + 4, this.cellSize - 8, this.cellSize - 8);
-                        }
-                    }
-                }
-                this.ctx.restore();
-            }
-        }
-
-        if (this.clearFlash > 0) {
-            this.ctx.fillStyle = `rgba(103, 247, 243, ${this.clearFlash * 0.14})`;
-            this.ctx.fillRect(this.boardRect.x, this.boardRect.y, activeSize, activeSize);
-            if (this.assets.burst) {
-                this.ctx.save();
-                this.ctx.globalAlpha = Math.min(1, this.clearFlash / 0.45);
-                this.ctx.drawImage(this.assets.burst, this.width / 2 - 170, this.boardRect.y + activeSize / 2 - 170, 340, 340);
-                this.ctx.restore();
-            }
-        }
-
-        const controlsY = 778;
-        const isSelected = (name) => this.selectedDirection.button === name;
-        this.drawButton('shift_toggle', { x: 20, y: controlsY, width: 120, height: 52 }, this.shiftArmed ? 'CANCEL' : `SHIFT  ${this.model.shiftCharges}`, this.shiftArmed ? '#ff81c0' : '#178c9b');
-        this.drawArrowButton('shift_left', { x: 151, y: controlsY, width: 106, height: 52 }, 'ROW', 'arrowLeft', isSelected('shift_left') ? '#65dbe6' : '#263d61');
-        this.drawArrowButton('shift_right', { x: 263, y: controlsY, width: 106, height: 52 }, 'ROW', 'arrowRight', isSelected('shift_right') ? '#65dbe6' : '#263d61');
-        this.drawArrowButton('shift_up', { x: 375, y: controlsY, width: 106, height: 52 }, 'COL', 'arrowUp', isSelected('shift_up') ? '#65dbe6' : '#263d61');
-        this.drawArrowButton('shift_down', { x: 487, y: controlsY, width: 106, height: 52 }, 'COL', 'arrowDown', isSelected('shift_down') ? '#65dbe6' : '#263d61');
-        this.ctx.fillStyle = '#b9cbe0';
-        this.ctx.textAlign = 'center';
-        this.ctx.font = '13px system-ui, sans-serif';
-        this.ctx.fillText('CHARGES', 650, controlsY + 20);
-        this.ctx.fillStyle = '#76f1df';
-        this.ctx.font = '700 22px system-ui, sans-serif';
-        this.ctx.fillText(String(this.model.shiftCharges), 650, controlsY + 44);
-        this.ctx.fillStyle = this.shiftArmed ? '#81f5df' : '#9bb0ca';
-        this.ctx.font = '15px system-ui, sans-serif';
-        this.ctx.fillText(this.shiftArmed ? 'Select a direction, then tap the target row or column.' : 'Drag pieces onto the board. Clear a line to earn a SHIFT.', 360, 855);
-
-        const trayY = 890;
-        for (let i = 0; i < 3; i++) {
-            const rect = { x: 30 + i * 225, y: trayY, width: 210, height: 190 };
-            this.trayRects.push(rect);
-            this.ctx.fillStyle = 'rgba(15, 31, 58, 0.92)';
-            this.ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
-            this.ctx.strokeStyle = 'rgba(117, 178, 226, 0.38)';
-            this.ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
-            const piece = this.model.tray[i];
-            if (!piece || piece.used) continue;
-            const maxX = Math.max(...piece.cells.map(c => c.x)) + 1;
-            const maxY = Math.max(...piece.cells.map(c => c.y)) + 1;
-            const size = Math.min(35, 112 / maxX, 100 / maxY);
-            const originX = rect.x + (rect.width - maxX * size) / 2;
-            const originY = rect.y + 42 + (105 - maxY * size) / 2;
-            const tile = this.assets[`tile${piece.color % 6}`];
-            for (const cell of piece.cells) {
-                const x = originX + cell.x * size;
-                const y = originY + cell.y * size;
-                if (tile) this.ctx.drawImage(tile, x, y, size - 2, size - 2);
-                else {
-                    this.ctx.fillStyle = '#5bdfe6';
-                    this.ctx.fillRect(x + 2, y + 2, size - 5, size - 5);
-                }
-            }
-            if (piece.special) {
-                const specialIcon = this.assets[`special${piece.special}`];
-                if (specialIcon) this.ctx.drawImage(specialIcon, rect.x + rect.width / 2 - 20, rect.y + 145, 40, 40);
-                else {
-                    this.ctx.fillStyle = '#f4dc7b';
-                    this.ctx.font = '700 13px system-ui, sans-serif';
-                    this.ctx.textAlign = 'center';
-                    this.ctx.fillText(['', 'BOMB', 'ARC', 'PRISM'][piece.special] || 'SPECIAL', rect.x + rect.width / 2, rect.y + 171);
-                }
-            }
-        }
-        // Render dragged piece attached to pointer
-        if (this.dragIndex >= 0) {
-            const piece = this.model.tray[this.dragIndex];
-            if (piece && !piece.used) {
-                this.ctx.save();
-                this.ctx.globalAlpha = 0.88;
-                const floatSize = this.cellSize > 0 ? this.cellSize * 0.85 : 40;
-                const offsetX = this.dragPosition.x;
-                const offsetY = this.dragPosition.y - 70;
-                const tile = this.assets[`tile${piece.color % 6}`];
-                for (const cell of piece.cells) {
-                    const px = offsetX + cell.x * floatSize - 20;
-                    const py = offsetY + cell.y * floatSize - 20;
-                    if (tile) {
-                        this.ctx.drawImage(tile, px, py, floatSize - 2, floatSize - 2);
-                    } else {
-                        this.ctx.fillStyle = '#58e5dc';
-                        this.ctx.fillRect(px, py, floatSize - 4, floatSize - 4);
-                    }
-                }
-                this.ctx.restore();
-            }
-        }
-
-        if (this.statusTimer > 0 && this.statusMessage) {
-            this.ctx.fillStyle = 'rgba(5, 12, 28, 0.82)';
-            this.ctx.fillRect(70, 1100, 580, 44);
-            this.ctx.fillStyle = '#e8f3ff';
-            this.ctx.textAlign = 'center';
-            this.ctx.font = '16px system-ui, sans-serif';
-            this.ctx.fillText(this.statusMessage, 360, 1128);
-        }
-    }
-
-    renderIslands() {
-        this.drawBackdrop(this.assets.island0, 0.26);
-        this.ctx.fillStyle = 'rgba(4, 12, 29, 0.76)';
-        this.ctx.fillRect(0, 0, this.width, this.height);
-        this.ctx.textAlign = 'center';
-        this.ctx.fillStyle = '#f5f7ff';
-        this.ctx.font = '700 38px system-ui, sans-serif';
-        this.ctx.fillText('ISLAND BUILDER', 360, 92);
-        this.ctx.fillStyle = '#83f1e2';
-        this.ctx.font = '20px system-ui, sans-serif';
-        this.ctx.fillText(`Aether Crystals: ${this.crystals}`, 360, 132);
-        const names = ['Sky Haven', 'Prismatic Falls', 'Neon Cyber-City'];
-        for (let i = 0; i < 3; i++) {
-            const x = 24 + i * 228;
-            const y = 205;
-            const w = 216;
-            const h = 500;
-            this.ctx.fillStyle = 'rgba(17, 34, 63, 0.94)';
-            this.ctx.fillRect(x, y, w, h);
-            this.ctx.strokeStyle = 'rgba(112, 216, 234, 0.52)';
-            this.ctx.strokeRect(x, y, w, h);
-            const img = this.assets[`island${i}`];
-            if (img) this.drawImageCover(img, x + 12, y + 16, w - 24, 158);
-            this.ctx.fillStyle = '#f4f7ff';
-            this.ctx.font = '700 18px system-ui, sans-serif';
-            this.ctx.fillText(names[i], x + w / 2, y + 210);
-            const level = Math.max(0, Math.min(5, Number(this.islandLevels[i]) || 0));
-            this.ctx.fillStyle = '#bfcee2';
-            this.ctx.font = '16px system-ui, sans-serif';
-            this.ctx.fillText(`Restored: ${level} / 5`, x + w / 2, y + 252);
-            
-            this.ctx.fillStyle = '#7bece0';
-            this.ctx.font = '13px system-ui, sans-serif';
-            const perkTexts = [
-                `Perk: +${level} Crystal${level === 1 ? '' : 's'} / run`,
-                `Perk: +${level * 150} Start Score`,
-                `Perk: ${level * 5}% Shift Refund`
-            ];
-            this.ctx.fillText(perkTexts[i], x + w / 2, y + 278);
-
-            this.ctx.fillStyle = '#bdf7ee';
-            this.ctx.font = '14px system-ui, sans-serif';
-            this.ctx.fillText(level >= 5 ? 'Fully restored' : `Next: ${this.islandCost(level)} crystals`, x + w / 2, y + 312);
-
-            this.drawButton(`restore_${i}`, { x: x + 22, y: y + 344, width: w - 44, height: 58 }, level >= 5 ? 'COMPLETE' : 'RESTORE', level >= 5 ? '#42665f' : '#48b8b9');
-            this.ctx.fillStyle = '#9fb5d0';
-            this.ctx.font = '14px system-ui, sans-serif';
-            this.ctx.fillText('Tap to restore a stage', x + w / 2, y + 444);
-        }
-        this.drawButton('islands_home', { x: 248, y: 830, width: 224, height: 62 }, '← HOME', '#586b91');
-        if (this.statusTimer > 0 && this.statusMessage) {
-            this.ctx.fillStyle = '#e5f3ff';
-            this.ctx.font = '16px system-ui, sans-serif';
-            this.ctx.fillText(this.statusMessage, 360, 954);
-        }
-    }
-
-    renderModal() {
-        this.ctx.fillStyle = 'rgba(3, 7, 18, 0.78)';
-        this.ctx.fillRect(0, 0, this.width, this.height);
-        const rect = { x: 92, y: 390, width: 536, height: 470 };
-        this.ctx.fillStyle = '#142543';
-        this.ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
-        this.ctx.strokeStyle = '#63d8e5';
-        this.ctx.lineWidth = 2;
-        this.ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
-        this.ctx.textAlign = 'center';
-        this.ctx.fillStyle = '#f4f7ff';
-        this.ctx.font = '700 34px system-ui, sans-serif';
-        this.ctx.fillText(this.modal === 'paused' ? 'PAUSED' : 'RUN COMPLETE', 360, rect.y + 72);
-        if (this.modal === 'results') {
-            this.ctx.fillStyle = '#c9d9ed';
-            this.ctx.font = '20px system-ui, sans-serif';
-            this.ctx.fillText(`Score: ${this.model.score}`, 360, rect.y + 126);
-            this.ctx.fillText(`Crystals earned: ${this.crystalsEarned}`, 360, rect.y + 161);
-        }
-        if (this.modal === 'paused') {
-            this.drawButton('modal_resume', { x: 146, y: rect.y + 190, width: 428, height: 58 }, 'RESUME', '#54e5df');
-            this.drawButton('modal_restart', { x: 146, y: rect.y + 265, width: 428, height: 58 }, 'RESTART', '#ff76b5');
-            this.drawButton('modal_home', { x: 146, y: rect.y + 340, width: 428, height: 58 }, 'HOME', '#927cff');
-        } else {
-            this.drawButton('modal_restart', { x: 146, y: rect.y + 235, width: 428, height: 58 }, 'PLAY AGAIN', '#54e5df');
-            this.drawButton('modal_home', { x: 146, y: rect.y + 315, width: 428, height: 58 }, 'HOME', '#927cff');
-        }
-    }
-
-    drawArrowButton(name, rect, label, iconKey, color) {
-        this.buttonHits[name] = rect;
-        this.ctx.fillStyle = color;
-        this.ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
-        this.ctx.strokeStyle = 'rgba(235, 249, 255, 0.4)';
-        this.ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
-        const icon = this.assets[iconKey];
-        if (icon) this.ctx.drawImage(icon, rect.x + 5, rect.y + 5, 42, 42);
-        this.ctx.fillStyle = '#071326';
-        this.ctx.font = '700 14px system-ui, sans-serif';
-        this.ctx.textAlign = 'center';
-        this.ctx.textBaseline = 'middle';
-        this.ctx.fillText(label, rect.x + 77, rect.y + rect.height / 2);
-        this.ctx.textBaseline = 'alphabetic';
-    }
-
-    drawButton(name, rect, label, color) {
-        this.buttonHits[name] = rect;
-        this.ctx.fillStyle = color;
-        this.ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
-        this.ctx.strokeStyle = 'rgba(235, 249, 255, 0.4)';
-        this.ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
-        this.ctx.fillStyle = '#071326';
-        this.ctx.font = `700 ${rect.height < 56 ? 15 : 18}px system-ui, sans-serif`;
-        this.ctx.textAlign = 'center';
-        this.ctx.textBaseline = 'middle';
-        this.ctx.fillText(label, rect.x + rect.width / 2, rect.y + rect.height / 2);
-        this.ctx.textBaseline = 'alphabetic';
     }
 }
