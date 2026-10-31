@@ -17,7 +17,12 @@ export class GridShiftMain {
         this.crystalsEarned = 0;
         this.bestScores = { classic: 0, fever: 0 };
         this.islandLevels = [0, 0, 0];
+        this.stats = { linesCleared: 0, maxCombo: 0, totalCrystalsEarned: 0 };
+        this.achievementsUnlocked = {};
+        this.theme = 'classic'; // 'classic', 'vaporwave', 'cyberpunk'
+        this.unlockedThemes = { classic: true, vaporwave: false, cyberpunk: false };
         this.muted = false;
+
         this.runFinalized = false;
         this.dragIndex = -1;
         this.dragPosition = { x: 0, y: 0 };
@@ -31,6 +36,8 @@ export class GridShiftMain {
         this.selectedDirection = { axis: 'row', direction: -1, button: 'shift_left' };
         this.clock = 0;
         this.clearFlash = 0;
+        this.shakeTimer = 0;
+        this.shakeIntensity = 0;
         this.assets = {};
         this.loadAssets();
         this.initCanvasSize();
@@ -173,7 +180,15 @@ export class GridShiftMain {
         }
         if (name === 'start_classic') this.startRun('classic');
         else if (name === 'start_fever') this.startRun('fever');
+        else if (name === 'start_daily') this.startRun('daily');
         else if (name === 'open_islands') this.screen = 'islands';
+        else if (name === 'toggle_theme') {
+            const themes = ['classic', 'vaporwave', 'cyberpunk'];
+            const nextIdx = (themes.indexOf(this.theme) + 1) % themes.length;
+            this.theme = themes[nextIdx];
+            this.setStatus(`Theme switched to ${this.theme.toUpperCase()}`, 1.5);
+            this.saveProfile();
+        }
         else if (name === 'back_home' || name === 'islands_home') this.goHome();
         else if (name === 'undo_move') {
             this.handleUndo();
@@ -238,11 +253,17 @@ export class GridShiftMain {
         if (outcome.special) {
             this.audio.playSpecial(outcome.special);
             this.vibrate([50, 30, 50]);
+            this.triggerShake(0.35, 14);
         }
         if (outcome.lines > 0) {
             this.audio.playClear(outcome.combo, outcome.lines);
             this.vibrate([40, 50, 40]);
             this.clearFlash = 0.45;
+            this.stats.linesCleared += outcome.lines;
+            this.stats.maxCombo = Math.max(this.stats.maxCombo, outcome.combo);
+            if (outcome.lines >= 2 || outcome.combo >= 3) {
+                this.triggerShake(0.25, 10);
+            }
             this.setStatus(`${outcome.lines} line${outcome.lines === 1 ? '' : 's'} cleared`, 1.5);
         } else {
             this.audio.setComboIntensity(0);
@@ -287,8 +308,11 @@ export class GridShiftMain {
 
     startRun(mode) {
         this.mode = mode;
-        this.model.reset(mode);
+        this.model.reset(mode === 'daily' ? 'classic' : mode);
         this.secondsLeft = 120;
+        if (mode === 'daily') {
+            this.model.shiftCharges = 2; // Daily bonus
+        }
         
         // Prismatic Falls Perk: +150 starting score per restored stage
         const prismaticLevel = this.islandLevels[1] || 0;
@@ -311,12 +335,19 @@ export class GridShiftMain {
         this.runFinalized = true;
         
         const baseCrystals = this.model.score <= 0 ? 0 : Math.min(50, Math.max(1, Math.floor(this.model.score / 650)));
-        // Sky Haven Perk: +1 bonus crystal per restored stage
         const skyHavenBonus = this.islandLevels[0] || 0;
-        this.crystalsEarned = baseCrystals > 0 ? baseCrystals + skyHavenBonus : 0;
+        const multiplier = this.mode === 'daily' ? 2 : 1;
+        this.crystalsEarned = baseCrystals > 0 ? (baseCrystals + skyHavenBonus) * multiplier : 0;
         
         this.crystals += this.crystalsEarned;
+        this.stats.totalCrystalsEarned += this.crystalsEarned;
         this.bestScores[this.mode] = Math.max(this.bestScores[this.mode] || 0, this.model.score);
+        
+        // Check Achievements
+        if (this.stats.linesCleared >= 20) this.achievementsUnlocked['lines_20'] = true;
+        if (this.stats.maxCombo >= 3) this.achievementsUnlocked['combo_3'] = true;
+        if (this.crystals >= 50) this.achievementsUnlocked['crystals_50'] = true;
+
         this.saveProfile();
         this.modal = 'results';
         this.shiftArmed = false;
@@ -381,6 +412,14 @@ export class GridShiftMain {
             this.bestScores = { classic: 0, fever: 0, ...(data.bestScores || {}) };
             this.islandLevels = Array.isArray(data.islandLevels) ? data.islandLevels.slice(0, 3) : [0, 0, 0];
             while (this.islandLevels.length < 3) this.islandLevels.push(0);
+            this.stats = {
+                linesCleared: Number(data.stats?.linesCleared) || 0,
+                maxCombo: Number(data.stats?.maxCombo) || 0,
+                totalCrystalsEarned: Number(data.stats?.totalCrystalsEarned) || 0
+            };
+            this.achievementsUnlocked = data.achievementsUnlocked || {};
+            this.theme = typeof data.theme === 'string' ? data.theme : 'classic';
+            this.unlockedThemes = { classic: true, ...(data.unlockedThemes || {}) };
         } catch (error) {
             console.warn('Could not load GridShift profile:', error);
         }
@@ -392,7 +431,11 @@ export class GridShiftMain {
                 crystals: this.crystals,
                 muted: this.muted,
                 bestScores: this.bestScores,
-                islandLevels: this.islandLevels
+                islandLevels: this.islandLevels,
+                stats: this.stats,
+                achievementsUnlocked: this.achievementsUnlocked,
+                theme: this.theme,
+                unlockedThemes: this.unlockedThemes
             }));
         } catch (error) {
             console.warn('Could not save GridShift profile:', error);
@@ -403,22 +446,46 @@ export class GridShiftMain {
         this.clock += delta;
         this.statusTimer = Math.max(0, this.statusTimer - delta);
         this.clearFlash = Math.max(0, this.clearFlash - delta);
+        this.shakeTimer = Math.max(0, this.shakeTimer - delta);
         if (this.screen === 'game' && !this.modal && this.mode === 'fever') {
             this.secondsLeft = Math.max(0, this.secondsLeft - delta);
             if (this.secondsLeft <= 0) this.finishRun('time');
         }
     }
 
+    triggerShake(duration = 0.3, intensity = 12) {
+        this.shakeTimer = duration;
+        this.shakeIntensity = intensity;
+    }
+
     render() {
         this.ctx.clearRect(0, 0, this.width, this.height);
         this.buttonHits = {};
         this.trayRects = [];
+
+        this.ctx.save();
+        if (this.shakeTimer > 0) {
+            const offsetX = (Math.random() - 0.5) * this.shakeIntensity;
+            const offsetY = (Math.random() - 0.5) * this.shakeIntensity;
+            this.ctx.translate(offsetX, offsetY);
+        }
+
         this.ctx.fillStyle = '#071326';
         this.ctx.fillRect(0, 0, this.width, this.height);
-        if (this.screen === 'home') this.renderHome();
-        else if (this.screen === 'game') this.renderGame();
-        else this.renderIslands();
-        if (this.modal) this.renderModal();
+        
+        if (this.screen === 'home') {
+            this.renderHome();
+        } else if (this.screen === 'game') {
+            this.renderGame();
+        } else {
+            this.renderIslands();
+        }
+
+        if (this.modal) {
+            this.renderModal();
+        }
+        
+        this.ctx.restore();
     }
 
     drawImageCover(image, x, y, width, height) {
@@ -454,10 +521,12 @@ export class GridShiftMain {
         this.ctx.fillStyle = '#d6e6f7';
         this.ctx.font = '20px system-ui, sans-serif';
         this.ctx.fillText('Place neon-glass shapes. Clear lines. Reshape the board.', 360, 326);
-        this.drawButton('start_classic', { x: 145, y: 440, width: 430, height: 82 }, 'CLASSIC ENDLESS', '#54e5df');
-        this.drawButton('start_fever', { x: 145, y: 544, width: 430, height: 82 }, 'FEVER RUSH · 2 MIN', '#ff76b5');
-        this.drawButton('open_islands', { x: 145, y: 648, width: 430, height: 72 }, 'ISLAND BUILDER', '#927cff');
-        this.drawButton('sound_toggle', { x: 250, y: 758, width: 220, height: 54 }, this.muted ? 'SOUND OFF' : 'SOUND ON', '#284b75');
+        this.drawButton('start_classic', { x: 145, y: 395, width: 430, height: 72 }, 'CLASSIC ENDLESS', '#54e5df');
+        this.drawButton('start_fever', { x: 145, y: 478, width: 430, height: 72 }, 'FEVER RUSH · 2 MIN', '#ff76b5');
+        this.drawButton('start_daily', { x: 145, y: 561, width: 430, height: 60 }, '★ DAILY CHALLENGE', '#f3c653');
+        this.drawButton('open_islands', { x: 145, y: 630, width: 430, height: 64 }, 'ISLAND BUILDER', '#927cff');
+        this.drawButton('toggle_theme', { x: 145, y: 704, width: 430, height: 54 }, `THEME: ${this.theme.toUpperCase()}`, '#3b7a82');
+        this.drawButton('sound_toggle', { x: 250, y: 772, width: 220, height: 48 }, this.muted ? 'SOUND OFF' : 'SOUND ON', '#284b75');
         this.ctx.fillStyle = '#d7e5fa';
         this.ctx.font = '18px system-ui, sans-serif';
         this.ctx.fillText(`Best Classic  ${this.bestScores.classic || 0}     ·     Best Fever  ${this.bestScores.fever || 0}`, 360, 890);
@@ -502,7 +571,16 @@ export class GridShiftMain {
                 const val = this.model.board[y][x];
                 if (val >= 0) {
                     const tile = this.assets[`tile${val % 6}`];
-                    if (tile) this.ctx.drawImage(tile, px + 1, py + 1, this.cellSize - 2, this.cellSize - 2);
+                    if (tile) {
+                        this.ctx.save();
+                        if (this.theme === 'vaporwave') {
+                            this.ctx.filter = 'hue-rotate(140deg) saturate(1.4)';
+                        } else if (this.theme === 'cyberpunk') {
+                            this.ctx.filter = 'hue-rotate(290deg) contrast(1.3)';
+                        }
+                        this.ctx.drawImage(tile, px + 1, py + 1, this.cellSize - 2, this.cellSize - 2);
+                        this.ctx.restore();
+                    }
                     else {
                         this.ctx.fillStyle = '#58e5dc';
                         this.ctx.fillRect(px + 4, py + 4, this.cellSize - 8, this.cellSize - 8);
