@@ -1,6 +1,7 @@
 export class GridShiftAudio {
     constructor() {
         this._music = null;
+        this._musicLoaded = false;
         this._context = null;
         this._muted = false;
         this._musicStarted = false;
@@ -13,9 +14,8 @@ export class GridShiftAudio {
         if (this._music) return;
         this._music = document.createElement('audio');
         this._music.loop = true;
-        this._music.preload = 'auto';
+        this._music.preload = 'none';
         this._music.volume = 0.15;
-        this._music.src = './assets/gridshift_theme.ogg';
         this._music.setAttribute('aria-hidden', 'true');
         if (parentElement) parentElement.appendChild(this._music);
     }
@@ -36,6 +36,11 @@ export class GridShiftAudio {
         const context = this._ensureContext();
         if (context?.state === 'suspended') context.resume().catch(() => {});
         if (!this._music) return;
+        if (!this._musicLoaded) {
+            this._music.src = './assets/gridshift_theme.ogg';
+            this._music.load();
+            this._musicLoaded = true;
+        }
         this._music.muted = false;
         if (this._music.paused) {
             this._music.play().then(() => { this._musicStarted = true; }).catch(() => {});

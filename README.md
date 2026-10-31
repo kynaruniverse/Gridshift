@@ -12,6 +12,18 @@ With Python 3 installed, run `npm run dev` and open `http://localhost:4173`. Do 
 
 Run `npm run check` for syntax checks and `npm test` for the model tests.
 
+## Visual redesign
+
+This build keeps the existing GridShift puzzle rules and supplied island/tile artwork, but refreshes the visual identity and screen hierarchy. The home screen focuses on the island and one primary Play action; the gameplay screen groups score controls, the framed board, shift controls, and piece tray into clearer surfaces; Island Builder uses larger horizontal restoration cards instead of narrow columns. Canvas rendering is scaled for high-density screens, and the Classic, Vaporwave, and Cyberpunk palettes now affect the full interface. Use the small theme control on Home or Island Builder to cycle themes. The selected theme is saved with the existing local profile.
+
+The main visual implementation is in `src/gridshift/GridShiftRender.js`; high-density canvas scaling and stored-theme validation are in `src/gridshift/GridShiftMain.js`; page framing and the Nunito font link are in `styles.css` and `index.html`. Game mechanics and progression rules were not intentionally changed.
+
+## Motion and haptics
+
+Successful drops ease from the release point into their board cells with a small stagger and settle. Clears use color-matched sparkle particles and one brief praise label, without the redundant full-board flash/burst overlay or generic success toast. The effect is capped at 60 live particles; users who request reduced motion get shorter, sparser effects. Each move selects one haptic pattern (ordinary placement, special, or clear/combo) through the browser Vibration API when supported.
+
+The background music source is assigned and loaded only when the first unmuted playback is requested, rather than being preloaded on the home screen.
+
 ## Controls
 
 - Drag one of the three offered pieces onto the board.

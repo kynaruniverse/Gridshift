@@ -36,9 +36,11 @@ export class GridShiftMain {
         this.shiftArmed = false;
         this.selectedDirection = { axis: 'row', direction: -1, button: 'shift_left' };
         this.clock = 0;
-        this.clearFlash = 0;
         this.shakeTimer = 0;
         this.shakeIntensity = 0;
+        this.snapAnimations = new Map();
+        this.particles = [];
+        this.prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches || false;
         this.assets = {};
         this.loadAssets();
         this.initCanvasSize();
@@ -63,7 +65,6 @@ export class GridShiftMain {
             special1: './assets/runtime/special_bomb.webp',
             special2: './assets/runtime/special_lightning.webp',
             special3: './assets/runtime/special_prism.webp',
-            burst: './assets/runtime/clear_burst.webp',
             island0: './assets/islands/sky_haven.webp',
             island1: './assets/islands/prismatic_falls.webp',
             island2: './assets/islands/neon_cyber_city.webp'
@@ -76,8 +77,10 @@ export class GridShiftMain {
     }
 
     initCanvasSize() {
-        this.canvas.width = this.width;
-        this.canvas.height = this.height;
+        const dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+        this.canvas.width = Math.round(this.width * dpr);
+        this.canvas.height = Math.round(this.height * dpr);
+        this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         this.canvas.style.width = '100%';
         this.canvas.style.height = '100%';
         this.canvas.style.display = 'block';
@@ -143,7 +146,7 @@ export class GridShiftMain {
             const layout = this.dragLayout();
             this.dragIndex = -1;
             if (this.screen === 'game' && !this.modal && layout && layout.overlapsBoard) {
-                this.placeFromTray(slot, layout.origin);
+                this.placeFromTray(slot, layout.origin, layout);
             }
             return;
         }
@@ -259,7 +262,14 @@ export class GridShiftMain {
         }
     }
 
-    placeFromTray(slot, origin) {
+    placeFromTray(slot, origin, releaseLayout = null) {
+        const beforeBoard = this.model.board.map(row => row.slice());
+        const piece = this.model.tray[slot];
+        const placedCells = piece?.cells.map(cell => ({
+            x: origin.x + cell.x, y: origin.y + cell.y,
+            localX: cell.x, localY: cell.y
+        })) || [];
+        const pieceColor = piece?.color ?? 0;
         const outcome = this.model.placePiece(slot, origin, this.mode === 'fever');
         if (!outcome.ok) {
             this.audio.playInvalid();
@@ -269,27 +279,25 @@ export class GridShiftMain {
         }
         this.audio.unlockAndPlay();
         this.audio.playPlacement();
-        this.vibrate(30);
+        this.animatePlacedCells(placedCells, pieceColor, releaseLayout);
+        const clearedCells = this.findClearedCells(beforeBoard, placedCells, pieceColor);
+        if (clearedCells.length) this.spawnClearParticles(clearedCells);
         if (outcome.special) {
             this.audio.playSpecial(outcome.special);
-            this.vibrate([50, 30, 50]);
             this.triggerShake(0.35, 14);
         }
         if (outcome.lines > 0) {
             this.audio.playClear(outcome.combo, outcome.lines);
             this.showPraise(outcome.lines, outcome.combo);
-            this.vibrate([40, 50, 40]);
-            this.clearFlash = 0.45;
             this.stats.linesCleared += outcome.lines;
             this.stats.maxCombo = Math.max(this.stats.maxCombo, outcome.combo);
             if (outcome.lines >= 2 || outcome.combo >= 3) {
                 this.triggerShake(0.25, 10);
             }
-            this.setStatus(`${outcome.lines} line${outcome.lines === 1 ? '' : 's'} cleared`, 1.5);
         } else {
             this.audio.setComboIntensity(0);
-            this.setStatus('Nice placement. Find the next clear.', 1.5);
         }
+        this.hapticForMove(outcome.lines, outcome.combo, Boolean(outcome.special));
         if (this.model.isStuck()) this.finishRun('stuck');
     }
 
@@ -305,17 +313,13 @@ export class GridShiftMain {
         }
         this.audio.unlockAndPlay();
         this.audio.playShift();
-        this.vibrate([30, 30]);
         if (result.lines > 0) {
             this.audio.playClear(result.combo, result.lines);
             this.showPraise(result.lines, result.combo);
-            this.vibrate([40, 50, 40]);
-            this.clearFlash = 0.45;
-            this.setStatus(`Shift cleared ${result.lines} line${result.lines === 1 ? '' : 's'}!`, 1.5);
         } else {
             this.audio.setComboIntensity(0);
-            this.setStatus('Line shifted. Keep building.', 1.5);
         }
+        this.hapticForMove(result.lines, result.combo);
         this.shiftArmed = false;
 
         // Neon Cyber-City Perk: 5% chance per stage to refund the shift charge used
@@ -404,11 +408,83 @@ export class GridShiftMain {
     }
 
     vibrate(pattern) {
-        if (typeof navigator !== 'undefined' && navigator.vibrate) {
+        if (typeof navigator !== 'undefined' && navigator.vibrate &&
+            (typeof document === 'undefined' || document.visibilityState !== 'hidden')) {
             try {
                 navigator.vibrate(pattern);
             } catch (e) {
                 // Ignore if permissions/device block vibration
+            }
+        }
+    }
+
+    hapticClear(lines, combo) {
+        if (combo >= 3) this.vibrate([22, 28, 22, 34, 42]);
+        else if (lines >= 3) this.vibrate([24, 34, 32]);
+        else if (lines === 2) this.vibrate([18, 28, 22]);
+        else this.vibrate(18);
+    }
+
+    hapticForMove(lines, combo, special = false) {
+        if (lines > 0) this.hapticClear(lines, combo);
+        else this.vibrate(special ? [18, 30, 24] : 12);
+    }
+
+    animatePlacedCells(cells, color, releaseLayout) {
+        const duration = this.prefersReducedMotion ? 0.14 : 0.26;
+        cells.forEach((cell, index) => {
+            if (this.model.board[cell.y]?.[cell.x] !== color) return;
+            const targetX = this.boardRect.x + cell.x * this.cellSize;
+            const targetY = this.boardRect.y + cell.y * this.cellSize;
+            this.snapAnimations.set(`${cell.x},${cell.y}`, {
+                color,
+                elapsed: 0,
+                delay: index * 0.018,
+                duration,
+                fromX: releaseLayout ? releaseLayout.left + cell.localX * releaseLayout.size : targetX,
+                fromY: releaseLayout ? releaseLayout.top + cell.localY * releaseLayout.size : targetY - 26,
+                targetX,
+                targetY
+            });
+        });
+    }
+
+    findClearedCells(beforeBoard, placedCells, placedColor) {
+        const placed = new Set(placedCells.map(cell => `${cell.x},${cell.y}`));
+        const cleared = [];
+        for (let y = 0; y < this.model.board.length; y++) {
+            for (let x = 0; x < this.model.board[y].length; x++) {
+                if (this.model.board[y][x] !== -1) continue;
+                const wasFilled = beforeBoard[y][x] !== -1;
+                const wasJustPlaced = placed.has(`${x},${y}`);
+                if (wasFilled || wasJustPlaced) {
+                    cleared.push({ x, y, color: wasFilled ? beforeBoard[y][x] : placedColor });
+                }
+            }
+        }
+        return cleared;
+    }
+
+    spawnClearParticles(cells) {
+        const colors = ['#4dcbb4', '#f28da9', '#a987db', '#f3ba50', '#9bcf59', '#66a9e8'];
+        const count = this.prefersReducedMotion ? 1 : 3;
+        const room = Math.max(0, 60 - this.particles.length);
+        const cap = this.particles.length + room;
+        for (const cell of cells.slice(0, 24)) {
+            for (let i = 0; i < count && this.particles.length < cap; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const speed = 45 + Math.random() * 115;
+                this.particles.push({
+                    x: this.boardRect.x + (cell.x + 0.5) * this.cellSize,
+                    y: this.boardRect.y + (cell.y + 0.5) * this.cellSize,
+                    vx: Math.cos(angle) * speed,
+                    vy: Math.sin(angle) * speed - 45,
+                    gravity: 170,
+                    age: 0,
+                    life: this.prefersReducedMotion ? 0.28 : 0.52 + Math.random() * 0.18,
+                    radius: 2 + Math.random() * 3,
+                    color: colors[cell.color % colors.length]
+                });
             }
         }
     }
@@ -440,7 +516,7 @@ export class GridShiftMain {
                 totalCrystalsEarned: Number(data.stats?.totalCrystalsEarned) || 0
             };
             this.achievementsUnlocked = data.achievementsUnlocked || {};
-            this.theme = typeof data.theme === 'string' ? data.theme : 'classic';
+            this.theme = ['classic', 'vaporwave', 'cyberpunk'].includes(data.theme) ? data.theme : 'classic';
             this.unlockedThemes = { classic: true, ...(data.unlockedThemes || {}) };
         } catch (error) {
             console.warn('Could not load GridShift profile:', error);
@@ -467,8 +543,19 @@ export class GridShiftMain {
     update(delta) {
         this.clock += delta;
         this.statusTimer = Math.max(0, this.statusTimer - delta);
-        this.clearFlash = Math.max(0, this.clearFlash - delta);
         this.shakeTimer = Math.max(0, this.shakeTimer - delta);
+        for (const [key, animation] of this.snapAnimations) {
+            animation.elapsed += delta;
+            if (animation.elapsed >= animation.delay + animation.duration) this.snapAnimations.delete(key);
+        }
+        for (const particle of this.particles) {
+            particle.age += delta;
+            particle.x += particle.vx * delta;
+            particle.y += particle.vy * delta;
+            particle.vy += particle.gravity * delta;
+            particle.vx *= Math.pow(0.94, delta * 60);
+        }
+        this.particles = this.particles.filter(particle => particle.age < particle.life);
         if (this.screen === 'game' && !this.modal && this.mode === 'fever') {
             this.secondsLeft = Math.max(0, this.secondsLeft - delta);
             if (this.secondsLeft <= 0) this.finishRun('time');
