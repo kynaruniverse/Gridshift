@@ -55,3 +55,22 @@ test('music has no source at initialization and loads only when playback is requ
         else delete globalThis.document;
     }
 });
+
+
+test('Cloud City adds a small stage-based crystal reward multiplier', () => {
+    const game = {
+        model: { score: 2600 },
+        islandLevels: [0, 0, 5],
+        mode: 'classic',
+        runFinalized: false,
+        stats: { linesCleared: 0, maxCombo: 0, totalCrystalsEarned: 0 },
+        achievementsUnlocked: {},
+        crystals: 0,
+        bestScores: { classic: 0, fever: 0 },
+        saveProfile() {},
+        audio: { setComboIntensity() {} }
+    };
+    GridShiftMain.prototype.finishRun.call(game, 'stuck');
+    assert.equal(game.crystalsEarned, 5); // 4 base crystals × 1.25 at stage 5
+    assert.equal(game.crystals, 5);
+});

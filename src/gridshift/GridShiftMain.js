@@ -33,8 +33,6 @@ export class GridShiftMain {
         this.buttonHits = {};
         this.statusMessage = '';
         this.statusTimer = 0;
-        this.shiftArmed = false;
-        this.selectedDirection = { axis: 'row', direction: -1, button: 'shift_left' };
         this.clock = 0;
         this.shakeTimer = 0;
         this.shakeIntensity = 0;
@@ -58,10 +56,6 @@ export class GridShiftMain {
             tile3: './assets/runtime/tile_gold.webp',
             tile4: './assets/runtime/tile_lime.webp',
             tile5: './assets/runtime/tile_blue.webp',
-            arrowLeft: './assets/runtime/arrow_left.webp',
-            arrowRight: './assets/runtime/arrow_right.webp',
-            arrowUp: './assets/runtime/arrow_up.webp',
-            arrowDown: './assets/runtime/arrow_down.webp',
             special1: './assets/runtime/special_bomb.webp',
             special2: './assets/runtime/special_lightning.webp',
             special3: './assets/runtime/special_prism.webp',
@@ -113,7 +107,7 @@ export class GridShiftMain {
     }
 
     pointerDown(pos) {
-        if (this.screen === 'game' && !this.modal && !this.shiftArmed) {
+        if (this.screen === 'game' && !this.modal) {
             const slot = this.pieceAt(pos);
             if (slot >= 0) {
                 this.dragIndex = slot;
@@ -155,9 +149,6 @@ export class GridShiftMain {
             this.handleButton(button);
             return;
         }
-        if (this.screen === 'game' && !this.modal && this.shiftArmed && this.isInsideBoard(pos)) {
-            this.shiftAt(this.boardCellAt(pos));
-        }
     }
 
     pieceAt(pos) {
@@ -175,18 +166,6 @@ export class GridShiftMain {
             if (pos.x >= rect.x && pos.x <= rect.x + rect.width && pos.y >= rect.y && pos.y <= rect.y + rect.height) return name;
         }
         return '';
-    }
-
-    isInsideBoard(pos) {
-        return pos.x >= this.boardRect.x && pos.x <= this.boardRect.x + this.boardRect.width &&
-            pos.y >= this.boardRect.y && pos.y <= this.boardRect.y + this.boardRect.height;
-    }
-
-    boardCellAt(pos) {
-        return {
-            x: Math.max(0, Math.min(Math.floor((pos.x - this.boardRect.x) / this.cellSize), 7)),
-            y: Math.max(0, Math.min(Math.floor((pos.y - this.boardRect.y) / this.cellSize), 7))
-        };
     }
 
     handleButton(name) {
@@ -209,7 +188,7 @@ export class GridShiftMain {
             const themes = ['classic', 'vaporwave', 'cyberpunk'];
             const nextIdx = (themes.indexOf(this.theme) + 1) % themes.length;
             this.theme = themes[nextIdx];
-            this.setStatus(`Theme switched to ${this.theme.toUpperCase()}`, 1.5);
+            this.setStatus(`Theme switched to ${this.themeName()}`, 1.5);
             this.saveProfile();
         }
         else if (name === 'back_home' || name === 'islands_home') this.goHome();
@@ -217,27 +196,7 @@ export class GridShiftMain {
             this.handleUndo();
         } else if (name === 'pause') {
             this.modal = 'paused';
-            this.shiftArmed = false;
             this.audio.pauseMusic();
-        } else if (name === 'shift_toggle') {
-            if (this.model.shiftCharges <= 0) {
-                this.setStatus('Clear a line to earn a Shift Charge.', 1.8);
-            } else {
-                this.shiftArmed = !this.shiftArmed;
-                this.setStatus(this.shiftArmed ? 'Choose a direction, then tap a row or column.' : 'Shift cancelled.', 1.8);
-            }
-        } else if (name.startsWith('shift_')) {
-            const directions = {
-                shift_left: { axis: 'row', direction: -1, button: name },
-                shift_right: { axis: 'row', direction: 1, button: name },
-                shift_up: { axis: 'col', direction: -1, button: name },
-                shift_down: { axis: 'col', direction: 1, button: name }
-            };
-            if (directions[name]) {
-                this.selectedDirection = directions[name];
-                this.shiftArmed = true;
-                this.setStatus('Tap a cell in the line you want to shift.', 1.8);
-            }
         } else if (name.startsWith('restore_')) {
             this.restoreIsland(Number(name.slice(-1)));
         }
@@ -256,7 +215,7 @@ export class GridShiftMain {
         if (this.model.undo()) {
             this.crystals -= cost;
             this.saveProfile();
-            this.audio.playShift();
+            this.audio.playUndo();
             this.vibrate(40);
             this.setStatus('Move undone! (-2 Crystals)', 1.8);
         }
@@ -270,7 +229,7 @@ export class GridShiftMain {
             localX: cell.x, localY: cell.y
         })) || [];
         const pieceColor = piece?.color ?? 0;
-        const outcome = this.model.placePiece(slot, origin, this.mode === 'fever');
+        const outcome = this.model.placePiece(slot, origin);
         if (!outcome.ok) {
             this.audio.playInvalid();
             this.vibrate(20);
@@ -301,59 +260,22 @@ export class GridShiftMain {
         if (this.model.isStuck()) this.finishRun('stuck');
     }
 
-    shiftAt(cell) {
-        const { axis, direction } = this.selectedDirection;
-        const index = axis === 'row' ? cell.y : cell.x;
-        const result = this.model.shiftLine(axis === 'row' ? 'row' : 'col', index, direction, this.mode === 'fever');
-        if (!result.ok) {
-            this.setStatus('No Shift Charges available.', 1.5);
-            this.shiftArmed = false;
-            this.vibrate(20);
-            return;
-        }
-        this.audio.unlockAndPlay();
-        this.audio.playShift();
-        if (result.lines > 0) {
-            this.audio.playClear(result.combo, result.lines);
-            this.showPraise(result.lines, result.combo);
-        } else {
-            this.audio.setComboIntensity(0);
-        }
-        this.hapticForMove(result.lines, result.combo);
-        this.shiftArmed = false;
-
-        // Neon Cyber-City Perk: 5% chance per stage to refund the shift charge used
-        const cyberLevel = this.islandLevels[2] || 0;
-        if (cyberLevel > 0 && Math.random() < cyberLevel * 0.05) {
-            this.model.shiftCharges = Math.min(3, this.model.shiftCharges + 1);
-            this.setStatus(`Cyber-City perk refunded a Shift Charge!`, 2.0);
-        }
-
-        if (this.model.isStuck()) this.finishRun('stuck');
-    }
-
     startRun(mode) {
         this.mode = mode;
         this.model.reset(mode === 'daily' ? 'classic' : mode);
         this.secondsLeft = 120;
-        if (mode === 'daily') {
-            this.model.shiftCharges = 2; // Daily bonus
-        }
-        
+
         // Prismatic Falls Perk: +150 starting score per restored stage
         const prismaticLevel = this.islandLevels[1] || 0;
-        if (prismaticLevel > 0) {
-            this.model.score = prismaticLevel * 150;
-        }
+        if (prismaticLevel > 0) this.model.score = prismaticLevel * 150;
 
         this.crystalsEarned = 0;
         this.runFinalized = false;
-        this.shiftArmed = false;
         this.screen = 'game';
         this.modal = '';
         this.audio.unlockAndPlay();
         this.audio.setComboIntensity(0);
-        this.setStatus('Drag a piece onto the board. Clear lines to earn shifts.', 3.2);
+        this.setStatus('Drag pieces onto the board. Clear lines to make space.', 3.2);
     }
 
     finishRun(reason) {
@@ -362,8 +284,11 @@ export class GridShiftMain {
         
         const baseCrystals = this.model.score <= 0 ? 0 : Math.min(50, Math.max(1, Math.floor(this.model.score / 650)));
         const skyHavenBonus = this.islandLevels[0] || 0;
+        const cloudCityBonusRate = 1 + 0.05 * (this.islandLevels[2] || 0);
         const multiplier = this.mode === 'daily' ? 2 : 1;
-        this.crystalsEarned = baseCrystals > 0 ? (baseCrystals + skyHavenBonus) * multiplier : 0;
+        this.crystalsEarned = baseCrystals > 0
+            ? Math.floor((baseCrystals + skyHavenBonus) * multiplier * cloudCityBonusRate)
+            : 0;
         
         this.crystals += this.crystalsEarned;
         this.stats.totalCrystalsEarned += this.crystalsEarned;
@@ -376,7 +301,6 @@ export class GridShiftMain {
 
         this.saveProfile();
         this.modal = 'results';
-        this.shiftArmed = false;
         this.endReason = reason;
         this.audio.setComboIntensity(0);
     }
@@ -403,7 +327,6 @@ export class GridShiftMain {
     goHome() {
         this.screen = 'home';
         this.modal = '';
-        this.shiftArmed = false;
         this.audio.unlockAndPlay();
     }
 

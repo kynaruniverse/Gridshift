@@ -31,7 +31,6 @@ export class GridShiftModel {
         this.specialBoard = [];
         this.tray = [];
         this.score = 0;
-        this.shiftCharges = 0;
         this.combo = 0;
         this.piecesPlaced = 0;
         this.mode = "classic";
@@ -45,7 +44,6 @@ export class GridShiftModel {
         this.specialBoard = this._emptyBoard(GridShiftModel.SPECIAL_NONE);
         this.tray = [];
         this.score = 0;
-        this.shiftCharges = 0;
         this.combo = 0;
         this.piecesPlaced = 0;
         this.history = [];
@@ -99,7 +97,6 @@ export class GridShiftModel {
             specialBoard: this.specialBoard,
             tray: this.tray,
             score: this.score,
-            shiftCharges: this.shiftCharges,
             combo: this.combo,
             piecesPlaced: this.piecesPlaced
         }));
@@ -113,13 +110,12 @@ export class GridShiftModel {
         this.specialBoard = snapshot.specialBoard;
         this.tray = snapshot.tray;
         this.score = snapshot.score;
-        this.shiftCharges = snapshot.shiftCharges;
         this.combo = snapshot.combo;
         this.piecesPlaced = snapshot.piecesPlaced;
         return true;
     }
 
-    placePiece(slot, origin, fever = false) {
+    placePiece(slot, origin) {
         if (slot < 0 || slot >= this.tray.length) return { ok: false };
         const piece = this.tray[slot];
         if (piece.used) return { ok: false };
@@ -167,7 +163,6 @@ export class GridShiftModel {
         if (totalCleared > 0) this.score += totalCleared * 10;
         if (lineCount > 0) {
             this.score += lineCount * 100 + lineCount * Math.min(this.combo - 1, 4) * 30;
-            this.shiftCharges = Math.min(3, this.shiftCharges + lineCount * (fever ? 2 : 1));
         }
 
         let batchComplete = true;
@@ -277,52 +272,6 @@ export class GridShiftModel {
         return { lines: fullRows.length + fullCols.length, cells: cleared.size };
     }
 
-    shiftLine(axis, index, direction, fever = false) {
-        if (this.shiftCharges <= 0 || index < 0 || index >= GridShiftModel.SIZE || Math.abs(direction) !== 1) {
-            return { ok: false };
-        }
-        this.saveSnapshot();
-        if (axis === "row") {
-            const row = this.board[index];
-            const sRow = this.specialBoard[index];
-            if (direction < 0) {
-                row.push(row.shift());
-                sRow.push(sRow.shift());
-            } else {
-                row.unshift(row.pop());
-                sRow.unshift(sRow.pop());
-            }
-        } else {
-            const col = [];
-            const sCol = [];
-            for (let y = 0; y < GridShiftModel.SIZE; y++) {
-                col.push(this.board[y][index]);
-                sCol.push(this.specialBoard[y][index]);
-            }
-            if (direction < 0) {
-                col.push(col.shift());
-                sCol.push(sCol.shift());
-            } else {
-                col.unshift(col.pop());
-                sCol.unshift(sCol.pop());
-            }
-            for (let y = 0; y < GridShiftModel.SIZE; y++) {
-                this.board[y][index] = col[y];
-                this.specialBoard[y][index] = sCol[y];
-            }
-        }
-        this.shiftCharges--;
-        const linesData = this._clearFullLines();
-        if (linesData.lines > 0) {
-            this.combo++;
-            this.score += linesData.cells * 10 + linesData.lines * 100 + linesData.lines * Math.min(this.combo - 1, 4) * 30;
-            this.shiftCharges = Math.min(3, this.shiftCharges + linesData.lines * (fever ? 2 : 1));
-        } else {
-            this.combo = 0;
-        }
-        return { ok: true, lines: linesData.lines, cells: linesData.cells, combo: this.combo, score: this.score };
-    }
-
     canAnyPieceFit() {
         for (const piece of this.tray) {
             if (piece.used) continue;
@@ -336,6 +285,6 @@ export class GridShiftModel {
     }
 
     isStuck() {
-        return this.shiftCharges <= 0 && !this.canAnyPieceFit();
+        return !this.canAnyPieceFit();
     }
 }

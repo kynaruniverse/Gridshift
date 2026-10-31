@@ -67,7 +67,7 @@ export class GridShiftAudio {
 
     playPlacement() { this._playTone(554.37, 0.07, 0.24, 720); }
     playInvalid() { this._playTone(190, 0.11, 0.20, 150); }
-    playShift() { this._playTone(246.94, 0.16, 0.25, 493.88); }
+    playUndo() { this._playTone(246.94, 0.16, 0.25, 493.88); }
     playButton() { this._playTone(440, 0.05, 0.14, 523.25); }
 
     playSpecial(specialId) {

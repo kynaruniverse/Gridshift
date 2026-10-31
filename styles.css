@@ -5,8 +5,8 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #dfeee7;
-  color: #244f4a;
+  background: #eff8ff;
+  color: #283b69;
   font-family: "Nunito", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   overscroll-behavior: none;
   -webkit-tap-highlight-color: transparent;
@@ -16,7 +16,7 @@ body {
   width: min(100vw, calc(100vh * 0.5625));
   height: min(100vh, calc(100vw * 1.7777778));
   overflow: hidden;
-  background: #e8f7f2;
+  background: #eff8ff;
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
