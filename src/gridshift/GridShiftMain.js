@@ -233,7 +233,8 @@ export class GridShiftMain {
         if (!outcome.ok) {
             this.audio.playInvalid();
             this.vibrate(20);
-            this.setStatus('That shape needs empty cells inside the board.', 1.8);
+            const offBoard = placedCells.some(cell => cell.x < 0 || cell.x > 7 || cell.y < 0 || cell.y > 7);
+            this.setStatus(offBoard ? 'Part of that piece is off the board.' : 'No room there. Pieces cannot overlap.', 1.8);
             return;
         }
         this.audio.unlockAndPlay();
