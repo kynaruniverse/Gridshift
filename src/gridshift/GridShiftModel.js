@@ -35,7 +35,9 @@ export class GridShiftModel {
         this.combo = 0;
         this.piecesPlaced = 0;
         this.mode = "classic";
+        this.history = [];
     }
+
 
     reset(newMode = "classic") {
         this.mode = newMode;
@@ -46,6 +48,7 @@ export class GridShiftModel {
         this.shiftCharges = 0;
         this.combo = 0;
         this.piecesPlaced = 0;
+        this.history = [];
         this._dealTray();
     }
 
@@ -90,12 +93,40 @@ export class GridShiftModel {
         return true;
     }
 
+    saveSnapshot() {
+        this.history.push(JSON.stringify({
+            board: this.board,
+            specialBoard: this.specialBoard,
+            tray: this.tray,
+            score: this.score,
+            shiftCharges: this.shiftCharges,
+            combo: this.combo,
+            piecesPlaced: this.piecesPlaced
+        }));
+        if (this.history.length > 5) this.history.shift();
+    }
+
+    undo() {
+        if (this.history.length === 0) return false;
+        const snapshot = JSON.parse(this.history.pop());
+        this.board = snapshot.board;
+        this.specialBoard = snapshot.specialBoard;
+        this.tray = snapshot.tray;
+        this.score = snapshot.score;
+        this.shiftCharges = snapshot.shiftCharges;
+        this.combo = snapshot.combo;
+        this.piecesPlaced = snapshot.piecesPlaced;
+        return true;
+    }
+
     placePiece(slot, origin, fever = false) {
         if (slot < 0 || slot >= this.tray.length) return { ok: false };
         const piece = this.tray[slot];
         if (piece.used) return { ok: false };
         const cells = piece.cells;
         if (!this.canPlace(cells, origin)) return { ok: false };
+
+        this.saveSnapshot();
 
         const color = piece.color;
         const placedCells = [];
@@ -250,6 +281,7 @@ export class GridShiftModel {
         if (this.shiftCharges <= 0 || index < 0 || index >= GridShiftModel.SIZE || Math.abs(direction) !== 1) {
             return { ok: false };
         }
+        this.saveSnapshot();
         if (axis === "row") {
             const row = this.board[index];
             const sRow = this.specialBoard[index];

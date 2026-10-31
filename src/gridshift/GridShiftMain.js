@@ -175,7 +175,9 @@ export class GridShiftMain {
         else if (name === 'start_fever') this.startRun('fever');
         else if (name === 'open_islands') this.screen = 'islands';
         else if (name === 'back_home' || name === 'islands_home') this.goHome();
-        else if (name === 'pause') {
+        else if (name === 'undo_move') {
+            this.handleUndo();
+        } else if (name === 'pause') {
             this.modal = 'paused';
             this.shiftArmed = false;
             this.audio.pauseMusic();
@@ -203,18 +205,43 @@ export class GridShiftMain {
         }
     }
 
+    handleUndo() {
+        if (this.model.history.length === 0) {
+            this.setStatus('No moves to undo.', 1.5);
+            return;
+        }
+        const cost = 2;
+        if (this.crystals < cost) {
+            this.setStatus(`Need ${cost} Aether Crystals to Undo!`, 2.0);
+            return;
+        }
+        if (this.model.undo()) {
+            this.crystals -= cost;
+            this.saveProfile();
+            this.audio.playShift();
+            this.vibrate(40);
+            this.setStatus('Move undone! (-2 Crystals)', 1.8);
+        }
+    }
+
     placeFromTray(slot, origin) {
         const outcome = this.model.placePiece(slot, origin, this.mode === 'fever');
         if (!outcome.ok) {
             this.audio.playInvalid();
+            this.vibrate(20);
             this.setStatus('That shape needs empty cells inside the board.', 1.8);
             return;
         }
         this.audio.unlockAndPlay();
         this.audio.playPlacement();
-        if (outcome.special) this.audio.playSpecial(outcome.special);
+        this.vibrate(30);
+        if (outcome.special) {
+            this.audio.playSpecial(outcome.special);
+            this.vibrate([50, 30, 50]);
+        }
         if (outcome.lines > 0) {
             this.audio.playClear(outcome.combo, outcome.lines);
+            this.vibrate([40, 50, 40]);
             this.clearFlash = 0.45;
             this.setStatus(`${outcome.lines} line${outcome.lines === 1 ? '' : 's'} cleared`, 1.5);
         } else {
@@ -231,12 +258,15 @@ export class GridShiftMain {
         if (!result.ok) {
             this.setStatus('No Shift Charges available.', 1.5);
             this.shiftArmed = false;
+            this.vibrate(20);
             return;
         }
         this.audio.unlockAndPlay();
         this.audio.playShift();
+        this.vibrate([30, 30]);
         if (result.lines > 0) {
             this.audio.playClear(result.combo, result.lines);
+            this.vibrate([40, 50, 40]);
             this.clearFlash = 0.45;
             this.setStatus(`Shift cleared ${result.lines} line${result.lines === 1 ? '' : 's'}!`, 1.5);
         } else {
@@ -244,6 +274,14 @@ export class GridShiftMain {
             this.setStatus('Line shifted. Keep building.', 1.5);
         }
         this.shiftArmed = false;
+
+        // Neon Cyber-City Perk: 5% chance per stage to refund the shift charge used
+        const cyberLevel = this.islandLevels[2] || 0;
+        if (cyberLevel > 0 && Math.random() < cyberLevel * 0.05) {
+            this.model.shiftCharges = Math.min(3, this.model.shiftCharges + 1);
+            this.setStatus(`Cyber-City perk refunded a Shift Charge!`, 2.0);
+        }
+
         if (this.model.isStuck()) this.finishRun('stuck');
     }
 
@@ -251,6 +289,13 @@ export class GridShiftMain {
         this.mode = mode;
         this.model.reset(mode);
         this.secondsLeft = 120;
+        
+        // Prismatic Falls Perk: +150 starting score per restored stage
+        const prismaticLevel = this.islandLevels[1] || 0;
+        if (prismaticLevel > 0) {
+            this.model.score = prismaticLevel * 150;
+        }
+
         this.crystalsEarned = 0;
         this.runFinalized = false;
         this.shiftArmed = false;
@@ -264,7 +309,12 @@ export class GridShiftMain {
     finishRun(reason) {
         if (this.runFinalized) return;
         this.runFinalized = true;
-        this.crystalsEarned = this.model.score <= 0 ? 0 : Math.min(50, Math.max(1, Math.floor(this.model.score / 650)));
+        
+        const baseCrystals = this.model.score <= 0 ? 0 : Math.min(50, Math.max(1, Math.floor(this.model.score / 650)));
+        // Sky Haven Perk: +1 bonus crystal per restored stage
+        const skyHavenBonus = this.islandLevels[0] || 0;
+        this.crystalsEarned = baseCrystals > 0 ? baseCrystals + skyHavenBonus : 0;
+        
         this.crystals += this.crystalsEarned;
         this.bestScores[this.mode] = Math.max(this.bestScores[this.mode] || 0, this.model.score);
         this.saveProfile();
@@ -298,6 +348,16 @@ export class GridShiftMain {
         this.modal = '';
         this.shiftArmed = false;
         this.audio.unlockAndPlay();
+    }
+
+    vibrate(pattern) {
+        if (typeof navigator !== 'undefined' && navigator.vibrate) {
+            try {
+                navigator.vibrate(pattern);
+            } catch (e) {
+                // Ignore if permissions/device block vibration
+            }
+        }
     }
 
     toggleSound() {
@@ -418,6 +478,8 @@ export class GridShiftMain {
         this.ctx.fillText(`SCORE  ${this.model.score}`, 34, 103);
         if (this.mode === 'fever') this.ctx.fillText(`TIME  ${Math.ceil(this.secondsLeft)}s`, 34, 133);
         else this.ctx.fillText(`BEST  ${this.bestScores.classic || 0}`, 34, 133);
+        const canUndo = this.model.history.length > 0 && this.crystals >= 2;
+        this.drawButton('undo_move', { x: 474, y: 44, width: 104, height: 50 }, 'UNDO ↺', canUndo ? '#e68a36' : '#324259');
         this.drawButton('pause', { x: 590, y: 44, width: 96, height: 50 }, 'PAUSE', '#657c9d');
 
         const boardSize = 560;
@@ -452,6 +514,34 @@ export class GridShiftMain {
                 }
             }
         }
+
+        // Render Ghost Preview when dragging a piece over the board
+        if (this.dragIndex >= 0 && this.isInsideBoard(this.dragPosition)) {
+            const piece = this.model.tray[this.dragIndex];
+            const origin = this.boardCellAt(this.dragPosition);
+            const canFit = piece && this.model.canPlace(piece.cells, origin);
+            if (piece) {
+                this.ctx.save();
+                this.ctx.globalAlpha = canFit ? 0.45 : 0.2;
+                const ghostTile = this.assets[`tile${piece.color % 6}`];
+                for (const cell of piece.cells) {
+                    const gx = origin.x + cell.x;
+                    const gy = origin.y + cell.y;
+                    if (gx >= 0 && gx < 8 && gy >= 0 && gy < 8) {
+                        const px = this.boardRect.x + gx * this.cellSize;
+                        const py = this.boardRect.y + gy * this.cellSize;
+                        if (ghostTile) {
+                            this.ctx.drawImage(ghostTile, px + 1, py + 1, this.cellSize - 2, this.cellSize - 2);
+                        } else {
+                            this.ctx.fillStyle = canFit ? '#58e5dc' : '#ff4a7c';
+                            this.ctx.fillRect(px + 4, py + 4, this.cellSize - 8, this.cellSize - 8);
+                        }
+                    }
+                }
+                this.ctx.restore();
+            }
+        }
+
         if (this.clearFlash > 0) {
             this.ctx.fillStyle = `rgba(103, 247, 243, ${this.clearFlash * 0.14})`;
             this.ctx.fillRect(this.boardRect.x, this.boardRect.y, activeSize, activeSize);
@@ -517,6 +607,30 @@ export class GridShiftMain {
                 }
             }
         }
+        // Render dragged piece attached to pointer
+        if (this.dragIndex >= 0) {
+            const piece = this.model.tray[this.dragIndex];
+            if (piece && !piece.used) {
+                this.ctx.save();
+                this.ctx.globalAlpha = 0.88;
+                const floatSize = this.cellSize > 0 ? this.cellSize * 0.85 : 40;
+                const offsetX = this.dragPosition.x;
+                const offsetY = this.dragPosition.y - 70;
+                const tile = this.assets[`tile${piece.color % 6}`];
+                for (const cell of piece.cells) {
+                    const px = offsetX + cell.x * floatSize - 20;
+                    const py = offsetY + cell.y * floatSize - 20;
+                    if (tile) {
+                        this.ctx.drawImage(tile, px, py, floatSize - 2, floatSize - 2);
+                    } else {
+                        this.ctx.fillStyle = '#58e5dc';
+                        this.ctx.fillRect(px, py, floatSize - 4, floatSize - 4);
+                    }
+                }
+                this.ctx.restore();
+            }
+        }
+
         if (this.statusTimer > 0 && this.statusMessage) {
             this.ctx.fillStyle = 'rgba(5, 12, 28, 0.82)';
             this.ctx.fillRect(70, 1100, 580, 44);
@@ -556,9 +670,21 @@ export class GridShiftMain {
             const level = Math.max(0, Math.min(5, Number(this.islandLevels[i]) || 0));
             this.ctx.fillStyle = '#bfcee2';
             this.ctx.font = '16px system-ui, sans-serif';
-            this.ctx.fillText(`Restored: ${level} / 5`, x + w / 2, y + 255);
+            this.ctx.fillText(`Restored: ${level} / 5`, x + w / 2, y + 252);
+            
             this.ctx.fillStyle = '#7bece0';
-            this.ctx.fillText(level >= 5 ? 'Fully restored' : `Next stage: ${this.islandCost(level)} crystals`, x + w / 2, y + 286);
+            this.ctx.font = '13px system-ui, sans-serif';
+            const perkTexts = [
+                `Perk: +${level} Crystal${level === 1 ? '' : 's'} / run`,
+                `Perk: +${level * 150} Start Score`,
+                `Perk: ${level * 5}% Shift Refund`
+            ];
+            this.ctx.fillText(perkTexts[i], x + w / 2, y + 278);
+
+            this.ctx.fillStyle = '#bdf7ee';
+            this.ctx.font = '14px system-ui, sans-serif';
+            this.ctx.fillText(level >= 5 ? 'Fully restored' : `Next: ${this.islandCost(level)} crystals`, x + w / 2, y + 312);
+
             this.drawButton(`restore_${i}`, { x: x + 22, y: y + 344, width: w - 44, height: 58 }, level >= 5 ? 'COMPLETE' : 'RESTORE', level >= 5 ? '#42665f' : '#48b8b9');
             this.ctx.fillStyle = '#9fb5d0';
             this.ctx.font = '14px system-ui, sans-serif';

@@ -39,3 +39,23 @@ test('a vertical shift wraps special markers with the board cells', () => {
     assert.equal(model.board[7][2], 4);
     assert.equal(model.specialBoard[7][2], GridShiftModel.SPECIAL_PRISM);
 });
+
+test('undo restores board state, score, and tray snapshot', () => {
+    const model = new GridShiftModel();
+    model.reset();
+    model.tray = [
+        { cells: [{ x: 0, y: 0 }], color: 1, special: 0, used: false },
+        { cells: [{ x: 0, y: 0 }], color: 2, special: 0, used: false },
+        { cells: [{ x: 0, y: 0 }], color: 3, special: 0, used: false }
+    ];
+    model.placePiece(0, { x: 0, y: 0 });
+    assert.equal(model.board[0][0], 1);
+    assert.equal(model.score, 5);
+
+    const success = model.undo();
+    assert.equal(success, true);
+    assert.equal(model.board[0][0], -1);
+    assert.equal(model.score, 0);
+    assert.equal(model.tray[0].used, false);
+});
+
