@@ -20,7 +20,7 @@ The visual implementation is in `src/gridshift/GridShiftRender.js`; high-density
 
 ## Gameplay and progression
 
-Place pieces wherever they fit and clear full rows or columns to score and open board space. The run ends when none of the available pieces can fit. The undo button remains available for two crystals. Cloud City now increases crystal rewards by 5% per restored stage (up to 25%); the other island perks continue to grant crystals per run and starting score.
+Place pieces wherever they fit and clear full rows or columns to score and open board space. The run ends when none of the available pieces can fit. The undo button remains available for two crystals. Cloud City now increases crystal rewards by 5% per restored stage (up to 25% in Tier I, 50% by Tier III); the other island perks continue to grant crystals per run and starting score.
 
 ## Motion, sound, and haptics
 

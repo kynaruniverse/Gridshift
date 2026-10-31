@@ -29,6 +29,16 @@ export class GridShiftModel {
     // One weight per entry in SHAPES, same order. Higher means more common.
     static SHAPE_WEIGHTS = [3, 5, 5, 5, 6, 4, 4, 4, 3, 3, 2, 2, 2, 4, 2, 2, 2];
 
+    // Turns text such as "gridshift:2026-10-31" into a stable 32-bit seed (FNV-1a).
+    static seedFromString(text) {
+        let hash = 2166136261;
+        for (let i = 0; i < text.length; i++) {
+            hash ^= text.charCodeAt(i);
+            hash = Math.imul(hash, 16777619);
+        }
+        return hash >>> 0;
+    }
+
     constructor() {
         this.board = [];
         this.specialBoard = [];
@@ -38,10 +48,13 @@ export class GridShiftModel {
         this.piecesPlaced = 0;
         this.mode = "classic";
         this.history = [];
+        this.seeded = false;
+        this.seedBase = 0;
+        this.trayCount = 0;
+        this.rngState = 0;
     }
 
-
-    reset(newMode = "classic") {
+    reset(newMode = "classic", seed = null) {
         this.mode = newMode;
         this.board = this._emptyBoard(-1);
         this.specialBoard = this._emptyBoard(GridShiftModel.SPECIAL_NONE);
@@ -50,6 +63,9 @@ export class GridShiftModel {
         this.combo = 0;
         this.piecesPlaced = 0;
         this.history = [];
+        this.seeded = seed !== null;
+        this.seedBase = this.seeded ? seed >>> 0 : 0;
+        this.trayCount = 0;
         this._dealTray();
     }
 
@@ -63,6 +79,14 @@ export class GridShiftModel {
     }
 
     _dealTray() {
+        if (this.seeded) {
+            // Seeded (daily) trays depend only on the seed and the tray number, so every
+            // player sees the same pieces no matter how they played the earlier ones.
+            this.rngState = (this.seedBase + Math.imul(this.trayCount + 1, 0x9E3779B1)) >>> 0;
+            this.trayCount++;
+            this.tray = this._rollTray();
+            return;
+        }
         for (let attempt = 0; attempt < 25; attempt++) {
             this.tray = this._rollTray();
             if (this.canAnyPieceFit()) return;
@@ -77,6 +101,14 @@ export class GridShiftModel {
     }
 
     _random() {
+        if (this.seeded) {
+            // mulberry32
+            this.rngState = (this.rngState + 0x6D2B79F5) >>> 0;
+            let t = this.rngState;
+            t = Math.imul(t ^ (t >>> 15), t | 1);
+            t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+            return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        }
         return (this.rng || Math.random)();
     }
 
@@ -103,7 +135,7 @@ export class GridShiftModel {
     _rollTray() {
         let filled = 0;
         for (const row of this.board) for (const cell of row) if (cell !== -1) filled++;
-        const crowd = filled / (GridShiftModel.SIZE * GridShiftModel.SIZE);
+        const crowd = this.seeded ? 0.3 : filled / (GridShiftModel.SIZE * GridShiftModel.SIZE);
         const taken = new Set();
         const tray = [];
         for (let i = 0; i < 3; i++) {
@@ -160,7 +192,8 @@ export class GridShiftModel {
             tray: this.tray,
             score: this.score,
             combo: this.combo,
-            piecesPlaced: this.piecesPlaced
+            piecesPlaced: this.piecesPlaced,
+            trayCount: this.trayCount
         }));
         if (this.history.length > 5) this.history.shift();
     }
@@ -174,6 +207,7 @@ export class GridShiftModel {
         this.score = snapshot.score;
         this.combo = snapshot.combo;
         this.piecesPlaced = snapshot.piecesPlaced;
+        this.trayCount = snapshot.trayCount ?? this.trayCount;
         return true;
     }
 

@@ -67,6 +67,10 @@ test('Cloud City adds a small stage-based crystal reward multiplier', () => {
         achievementsUnlocked: {},
         crystals: 0,
         bestScores: { classic: 0, fever: 0 },
+        cloudCarry: 0,
+        cloudBonusEarned: 0,
+        applyCloudBonus: GridShiftMain.prototype.applyCloudBonus,
+        perkLevel: GridShiftMain.prototype.perkLevel,
         saveProfile() {},
         audio: { setComboIntensity() {} }
     };

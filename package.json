@@ -6,7 +6,7 @@
   "description": "Mobile-first GridShift browser game",
   "scripts": {
     "dev": "python3 -m http.server 4173",
-    "check": "node --check src/main.js && node --check src/gridshift/GridShiftMain.js && node --check src/gridshift/GridShiftModel.js && node --check src/gridshift/GridShiftAudio.js && node --check src/gridshift/GridShiftRender.js",
+    "check": "node --check src/main.js && node --check src/gridshift/GridShiftMain.js && node --check src/gridshift/GridShiftModel.js && node --check src/gridshift/GridShiftAudio.js && node --check src/gridshift/GridShiftRender.js && node --check sw.js",
     "test": "node --test"
   }
 }

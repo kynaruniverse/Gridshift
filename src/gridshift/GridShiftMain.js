@@ -1,3 +1,8 @@
+import { GridShiftModel } from './GridShiftModel.js';
+
+// Three tiers of five stages. Stages past the first tier give half-strength perks.
+const ISLAND_MAX_LEVEL = 15;
+
 export class GridShiftMain {
     constructor(model, audio, containerElement) {
         this.model = model;
@@ -21,6 +26,8 @@ export class GridShiftMain {
         this.statHistory = [];
         this.achievementsUnlocked = {};
         this.cloudCarry = 0;
+        this.daily = { date: '', best: 0, claimed: false, streak: 0, bestStreak: 0, lastDate: '' };
+        this.runDailyKey = '';
         this.cloudBonusEarned = 0;
         this.theme = 'classic'; // 'classic', 'vaporwave', 'cyberpunk'
         this.unlockedThemes = { classic: true, vaporwave: false, cyberpunk: false };
@@ -55,7 +62,6 @@ export class GridShiftMain {
 
     loadAssets() {
         const files = {
-            plate: './assets/runtime/board_plate.webp',
             tile0: './assets/runtime/tile_cyan.webp',
             tile1: './assets/runtime/tile_pink.webp',
             tile2: './assets/runtime/tile_violet.webp',
@@ -184,6 +190,7 @@ export class GridShiftMain {
             if (name === 'modal_resume') this.modal = '';
             if (name === 'modal_restart') this.startRun(this.mode);
             if (name === 'modal_home') this.goHome();
+            if (name === 'modal_share') this.shareDaily();
             return;
         }
         if (name === 'start_classic') this.startRun('classic');
@@ -281,12 +288,18 @@ export class GridShiftMain {
 
     startRun(mode) {
         this.mode = mode;
-        this.model.reset(mode === 'daily' ? 'classic' : mode);
+        let seed = null;
+        if (mode === 'daily') {
+            this.runDailyKey = this.dailyKey();
+            seed = GridShiftModel.seedFromString(`gridshift:${this.runDailyKey}`);
+        }
+        this.model.reset(mode === 'daily' ? 'classic' : mode, seed);
         this.secondsLeft = 120;
 
         // Prismatic Falls Perk: +150 starting score per restored stage
-        const prismaticLevel = this.islandLevels[1] || 0;
-        if (prismaticLevel > 0) this.model.score = prismaticLevel * 150;
+        const prismaticLevel = this.perkLevel(1);
+        // Not applied to the daily, so scores stay comparable between players.
+        if (prismaticLevel > 0 && mode !== 'daily') this.model.score = prismaticLevel * 150;
 
         this.crystalsEarned = 0;
         this.runFinalized = false;
@@ -305,9 +318,10 @@ export class GridShiftMain {
         if (this.tutorialStep >= 0) this.endTutorial();
         
         const baseCrystals = this.model.score <= 0 ? 0 : Math.min(50, Math.max(1, Math.floor(this.model.score / 650)));
-        const skyHavenBonus = this.islandLevels[0] || 0;
+        const skyHavenBonus = Math.floor(this.perkLevel(0));
         this.cloudBonusEarned = 0;
-        const multiplier = this.mode === 'daily' ? 2 : 1;
+        // Only the first daily run of each day earns the 2x bonus.
+        const multiplier = this.mode === 'daily' && !this.dailyClaimed(this.runDailyKey) ? 2 : 1;
         this.crystalsEarned = baseCrystals > 0
             ? this.applyCloudBonus((baseCrystals + skyHavenBonus) * multiplier)
             : 0;
@@ -315,6 +329,7 @@ export class GridShiftMain {
         this.crystals += this.crystalsEarned;
         this.stats.totalCrystalsEarned += this.crystalsEarned;
         this.bestScores[this.mode] = Math.max(this.bestScores[this.mode] || 0, this.model.score);
+        if (this.mode === 'daily') this.recordDaily();
         
         // Check Achievements
         if (this.stats.linesCleared >= 20) this.achievementsUnlocked['lines_20'] = true;
@@ -329,7 +344,7 @@ export class GridShiftMain {
 
     restoreIsland(index) {
         const level = this.islandLevels[index] || 0;
-        if (level >= 5) {
+        if (level >= ISLAND_MAX_LEVEL) {
             this.setStatus('That island is fully restored.', 1.8);
             return;
         }
@@ -341,10 +356,76 @@ export class GridShiftMain {
         this.crystals -= cost;
         this.islandLevels[index] = level + 1;
         this.saveProfile();
-        this.setStatus('Island restored. Your progress is saved.', 2);
+        this.setStatus((level + 1) % 5 === 0 ? 'Tier complete! A new tier is open.' : 'Island restored. Your progress is saved.', 2);
     }
 
     islandCost(level) { return 3 + level * 2; }
+
+    islandMax() { return ISLAND_MAX_LEVEL; }
+
+    islandTier(level) { return Math.min(2, Math.floor(level / 5)); }
+
+    // Perk strength: full value for the first five stages, half value after that.
+    perkLevel(index) {
+        const level = Math.max(0, Math.min(ISLAND_MAX_LEVEL, Number(this.islandLevels?.[index]) || 0));
+        return level <= 5 ? level : 5 + (level - 5) * 0.5;
+    }
+
+    dailyKey() { return new Date().toISOString().slice(0, 10); }
+
+    dayBefore(key) {
+        const date = new Date(`${key}T00:00:00Z`);
+        date.setUTCDate(date.getUTCDate() - 1);
+        return date.toISOString().slice(0, 10);
+    }
+
+    dailyClaimed(key) { return this.daily.date === key && this.daily.claimed; }
+
+    dailyBestToday() { return this.daily.date === this.runDailyKey ? this.daily.best : 0; }
+
+    currentStreak() {
+        const today = this.dailyKey();
+        const { lastDate, streak } = this.daily;
+        return lastDate === today || lastDate === this.dayBefore(today) ? streak : 0;
+    }
+
+    dailyLabel() {
+        const today = this.dailyKey();
+        if (this.dailyClaimed(today)) return `DAILY ✓ ${this.daily.best}`;
+        const streak = this.currentStreak();
+        return streak > 0 ? `DAILY · 🔥 ${streak}` : 'DAILY CHALLENGE';
+    }
+
+    recordDaily() {
+        const key = this.runDailyKey || this.dailyKey();
+        const d = this.daily;
+        if (d.date !== key) { d.date = key; d.best = 0; d.claimed = false; }
+        d.best = Math.max(d.best, this.model.score);
+        if (!d.claimed) {
+            d.claimed = true;
+            d.streak = d.lastDate === this.dayBefore(key) ? d.streak + 1 : 1;
+            d.lastDate = key;
+            d.bestStreak = Math.max(d.bestStreak, d.streak);
+        }
+        this.saveProfile();
+    }
+
+    async shareDaily() {
+        const key = this.runDailyKey || this.dailyKey();
+        const streak = this.currentStreak();
+        const text = `GridShift Daily ${key}\n${this.model.score} pts${streak > 1 ? ` · ${streak}-day streak` : ''}\nCan you beat it?`;
+        const url = location.href.split('#')[0];
+        try {
+            if (navigator.share) {
+                await navigator.share({ title: 'GridShift Daily', text, url });
+                return;
+            }
+            await navigator.clipboard.writeText(`${text}\n${url}`);
+            this.setStatus('Result copied to clipboard.', 2);
+        } catch (error) {
+            if (error?.name !== 'AbortError') this.setStatus('Could not share on this device.', 2);
+        }
+    }
 
     checkSpecialTips() {
         if (this.screen !== 'game' || this.modal || this.tutorialStep >= 0 || this.statusTimer > 0) return;
@@ -376,7 +457,7 @@ export class GridShiftMain {
     }
 
     applyCloudBonus(amount) {
-        const percent = 5 * (this.islandLevels[2] || 0);
+        const percent = 5 * this.perkLevel(2);
         if (percent <= 0) return amount;
         const total = amount * percent + (this.cloudCarry || 0);
         const whole = Math.floor(total / 100);
@@ -492,7 +573,9 @@ export class GridShiftMain {
             this.crystals = Number(data.crystals) || 0;
             this.muted = Boolean(data.muted);
             this.bestScores = { classic: 0, fever: 0, ...(data.bestScores || {}) };
-            this.islandLevels = Array.isArray(data.islandLevels) ? data.islandLevels.slice(0, 3) : [0, 0, 0];
+            this.islandLevels = Array.isArray(data.islandLevels)
+                ? data.islandLevels.slice(0, 3).map(v => Math.max(0, Math.min(ISLAND_MAX_LEVEL, Math.floor(Number(v) || 0))))
+                : [0, 0, 0];
             while (this.islandLevels.length < 3) this.islandLevels.push(0);
             this.stats = {
                 linesCleared: Number(data.stats?.linesCleared) || 0,
@@ -505,6 +588,15 @@ export class GridShiftMain {
             this.tutorialDone = data.tutorialDone === true || Object.values(this.bestScores).some(score => score > 0);
             this.seenSpecials = data.seenSpecials && typeof data.seenSpecials === 'object' ? data.seenSpecials : {};
             this.unlockedThemes = { classic: true, ...(data.unlockedThemes || {}) };
+            const d = data.daily && typeof data.daily === 'object' ? data.daily : {};
+            this.daily = {
+                date: typeof d.date === 'string' ? d.date : '',
+                best: Math.max(0, Number(d.best) || 0),
+                claimed: d.claimed === true,
+                streak: Math.max(0, Math.floor(Number(d.streak) || 0)),
+                bestStreak: Math.max(0, Math.floor(Number(d.bestStreak) || 0)),
+                lastDate: typeof d.lastDate === 'string' ? d.lastDate : ''
+            };
         } catch (error) {
             console.warn('Could not load GridShift profile:', error);
         }
@@ -523,7 +615,8 @@ export class GridShiftMain {
                 theme: this.theme,
                 unlockedThemes: this.unlockedThemes,
                 tutorialDone: this.tutorialDone,
-                seenSpecials: this.seenSpecials
+                seenSpecials: this.seenSpecials,
+                daily: this.daily
             }));
         } catch (error) {
             console.warn('Could not save GridShift profile:', error);
