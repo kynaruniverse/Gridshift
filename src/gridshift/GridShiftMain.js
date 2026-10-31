@@ -18,6 +18,7 @@ export class GridShiftMain {
         this.bestScores = { classic: 0, fever: 0 };
         this.islandLevels = [0, 0, 0];
         this.stats = { linesCleared: 0, maxCombo: 0, totalCrystalsEarned: 0 };
+        this.statHistory = [];
         this.achievementsUnlocked = {};
         this.theme = 'classic'; // 'classic', 'vaporwave', 'cyberpunk'
         this.unlockedThemes = { classic: true, vaporwave: false, cyberpunk: false };
@@ -213,6 +214,11 @@ export class GridShiftMain {
             return;
         }
         if (this.model.undo()) {
+            const previous = this.statHistory.pop();
+            if (previous) {
+                this.stats.linesCleared = previous.linesCleared;
+                this.stats.maxCombo = previous.maxCombo;
+            }
             this.crystals -= cost;
             this.saveProfile();
             this.audio.playUndo();
@@ -229,6 +235,7 @@ export class GridShiftMain {
             localX: cell.x, localY: cell.y
         })) || [];
         const pieceColor = piece?.color ?? 0;
+        const statsBefore = { linesCleared: this.stats.linesCleared, maxCombo: this.stats.maxCombo };
         const outcome = this.model.placePiece(slot, origin);
         if (!outcome.ok) {
             this.audio.playInvalid();
@@ -239,6 +246,9 @@ export class GridShiftMain {
         }
         this.audio.unlockAndPlay();
         this.audio.playPlacement();
+        this.statHistory.push(statsBefore);
+        const excess = this.statHistory.length - this.model.history.length;
+        if (excess > 0) this.statHistory.splice(0, excess);
         this.animatePlacedCells(placedCells, pieceColor, releaseLayout);
         const clearedCells = this.findClearedCells(beforeBoard, placedCells, pieceColor);
         if (clearedCells.length) this.spawnClearParticles(clearedCells);
@@ -272,6 +282,7 @@ export class GridShiftMain {
 
         this.crystalsEarned = 0;
         this.runFinalized = false;
+        this.statHistory = [];
         this.screen = 'game';
         this.modal = '';
         this.audio.unlockAndPlay();
