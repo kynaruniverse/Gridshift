@@ -24,7 +24,7 @@ test('placed tiles keep release and destination coordinates for eased snapping',
     assert.equal(animation.fromY, 180);
     assert.equal(animation.targetX, 208);
     assert.equal(animation.targetY, 446);
-    assert.equal(animation.duration, 0.26);
+    assert.equal(animation.duration, 0.16);
 });
 
 test('cleared-cell detection includes previous tiles and new tiles erased by the same move', () => {

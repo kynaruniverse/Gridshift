@@ -11,7 +11,17 @@ export class GridShiftMain {
         this.width = 720;
         this.height = 1280;
         this.canvas = document.createElement('canvas');
-        this.ctx = this.canvas.getContext('2d');
+        // alpha:false and desynchronized:true both reduce drawing cost and input-to-screen delay.
+        this.ctx = this.canvas.getContext('2d', { alpha: false, desynchronized: true });
+        this.dprCap = 2;
+        try {
+            const saved = Number(localStorage.getItem('gridshift-dpr'));
+            if (saved >= 1 && saved <= 2) this.dprCap = saved;
+        } catch (error) { /* storage unavailable */ }
+        this.showFps = new URLSearchParams(location.search).has('fps');
+        this.frameStats = { last: 0, frames: 0, ms: 0, avg: 0, fps: 0, windows: 0 };
+        this.dragStartClock = 0;
+        this.canvasRect = null;
         this.container.appendChild(this.canvas);
 
         this.screen = 'home';
@@ -83,7 +93,8 @@ export class GridShiftMain {
     }
 
     initCanvasSize() {
-        const dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+        const dpr = Math.min(this.dprCap, Math.max(1, window.devicePixelRatio || 1));
+        this.canvasRect = null;
         this.canvas.width = Math.round(this.width * dpr);
         this.canvas.height = Math.round(this.height * dpr);
         this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -93,9 +104,30 @@ export class GridShiftMain {
         this.canvas.style.touchAction = 'none';
     }
 
+    // Drops canvas resolution if the game cannot hold about 40 fps, and remembers the choice.
+    trackFrame(timestamp) {
+        const s = this.frameStats;
+        if (s.last) {
+            const ms = timestamp - s.last;
+            if (ms < 250) { s.frames++; s.ms += ms; }
+        }
+        s.last = timestamp;
+        if (s.frames < 45) return;
+        s.avg = s.ms / s.frames;
+        s.fps = 1000 / s.avg;
+        s.frames = 0;
+        s.ms = 0;
+        s.windows++;
+        if (s.windows > 1 && s.avg > 24 && this.dprCap > 1) {
+            this.dprCap = this.dprCap > 1.5 ? 1.5 : 1;
+            try { localStorage.setItem('gridshift-dpr', String(this.dprCap)); } catch (error) { /* ignore */ }
+            this.initCanvasSize();
+        }
+    }
+
     bindEvents() {
         const getPos = (event) => {
-            const rect = this.canvas.getBoundingClientRect();
+            const rect = this.canvasRect || (this.canvasRect = this.canvas.getBoundingClientRect());
             const point = event.changedTouches?.[0] || event;
             return {
                 x: (point.clientX - rect.left) * this.width / rect.width,
@@ -105,6 +137,7 @@ export class GridShiftMain {
         this.canvas.addEventListener('pointerdown', (event) => {
             event.preventDefault();
             this.canvas.setPointerCapture?.(event.pointerId);
+            this.canvasRect = null;
             this.pointerDown(getPos(event));
         });
         this.canvas.addEventListener('pointermove', (event) => {
@@ -123,6 +156,7 @@ export class GridShiftMain {
             const slot = this.pieceAt(pos);
             if (slot >= 0) {
                 this.dragIndex = slot;
+                this.dragStartClock = this.clock;
                 this.dragPosition = pos;
             }
         }
@@ -502,7 +536,7 @@ export class GridShiftMain {
     }
 
     animatePlacedCells(cells, color, releaseLayout) {
-        const duration = this.prefersReducedMotion ? 0.14 : 0.26;
+        const duration = this.prefersReducedMotion ? 0.1 : 0.16;
         cells.forEach((cell, index) => {
             if (this.model.board[cell.y]?.[cell.x] !== color) return;
             const targetX = this.boardRect.x + cell.x * this.cellSize;

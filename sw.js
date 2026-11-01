@@ -1,4 +1,4 @@
-const CACHE = 'gridshift-v4';
+const CACHE = 'gridshift-v5';
 const CORE = [
     './',
     './index.html',

@@ -22,6 +22,7 @@ let previous = 0;
 function frame(timestamp) {
     const delta = previous ? Math.min((timestamp - previous) / 1000, 0.1) : 0;
     previous = timestamp;
+    game.trackFrame(timestamp);
     game.update(delta);
     game.render();
     requestAnimationFrame(frame);
