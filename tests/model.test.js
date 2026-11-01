@@ -17,7 +17,7 @@ test('placing a piece updates the board and scores', () => {
     assert.equal(model.score, 10);
 });
 
-test('clearing a full line scores normally without charge mechanics', () => {
+test('clearing a full line in classic mode scores normally and earns no shift charges', () => {
     const model = new GridShiftModel();
     model.reset();
     model.board[0] = [0, 1, 2, 3, 4, 5, 0, -1];
@@ -30,7 +30,8 @@ test('clearing a full line scores normally without charge mechanics', () => {
     assert.equal(result.lines, 1);
     assert.equal(model.score, 185);
     assert.ok(model.board[0].every(cell => cell === -1));
-    assert.equal('shiftCharges' in model, false);
+    assert.equal(model.shiftEnabled, false);
+    assert.equal(model.shiftCharges, 0);
 });
 
 test('a run ends when none of the offered pieces fit, without a special escape mechanic', () => {

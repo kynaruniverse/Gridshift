@@ -1,5 +1,8 @@
 import { GridShiftModel } from './GridShiftModel.js';
 
+const SHIFT_LOCK_PX = 14; // movement before the swipe picks a row or a column
+const SHIFT_FIRE_PX = 40; // movement along that line that triggers the slide
+
 // Three tiers of five stages. Stages past the first tier give half-strength perks.
 const ISLAND_MAX_LEVEL = 15;
 
@@ -22,6 +25,7 @@ export class GridShiftMain {
         this.frameStats = { last: 0, frames: 0, ms: 0, avg: 0, fps: 0, windows: 0 };
         this.dragStartClock = 0;
         this.canvasRect = null;
+        this.shiftGesture = null;
         this.container.appendChild(this.canvas);
 
         this.screen = 'home';
@@ -30,7 +34,7 @@ export class GridShiftMain {
         this.secondsLeft = 120;
         this.crystals = 0;
         this.crystalsEarned = 0;
-        this.bestScores = { classic: 0, fever: 0 };
+        this.bestScores = { classic: 0, fever: 0, shift: 0 };
         this.islandLevels = [0, 0, 0];
         this.stats = { linesCleared: 0, maxCombo: 0, totalCrystalsEarned: 0 };
         this.statHistory = [];
@@ -142,12 +146,13 @@ export class GridShiftMain {
         });
         this.canvas.addEventListener('pointermove', (event) => {
             this.dragPosition = getPos(event);
+            if (this.shiftGesture) this.shiftMove(this.dragPosition);
         });
         this.canvas.addEventListener('pointerup', (event) => {
             event.preventDefault();
             this.pointerUp(getPos(event));
         });
-        this.canvas.addEventListener('pointercancel', () => { this.dragIndex = -1; });
+        this.canvas.addEventListener('pointercancel', () => { this.dragIndex = -1; this.shiftGesture = null; });
         window.addEventListener('resize', () => this.initCanvasSize());
     }
 
@@ -158,8 +163,83 @@ export class GridShiftMain {
                 this.dragIndex = slot;
                 this.dragStartClock = this.clock;
                 this.dragPosition = pos;
+            } else if (this.model.shiftEnabled) {
+                const cell = this.boardCellAt(pos);
+                if (cell) this.shiftGesture = { startX: pos.x, startY: pos.y, cell, axis: null };
             }
         }
+    }
+
+    boardCellAt(pos) {
+        const b = this.boardRect;
+        if (!b || !this.cellSize) return null;
+        const x = Math.floor((pos.x - b.x) / this.cellSize);
+        const y = Math.floor((pos.y - b.y) / this.cellSize);
+        return x >= 0 && x < 8 && y >= 0 && y < 8 ? { x, y } : null;
+    }
+
+    // One swipe: press a cell, drag along its row or column, and the line slides as soon
+    // as the finger has travelled far enough. No release needed.
+    shiftMove(pos) {
+        const g = this.shiftGesture;
+        if (!g || this.modal) return;
+        const dx = pos.x - g.startX;
+        const dy = pos.y - g.startY;
+        if (!g.axis && Math.max(Math.abs(dx), Math.abs(dy)) > SHIFT_LOCK_PX) {
+            g.axis = Math.abs(dx) >= Math.abs(dy) ? 'row' : 'col';
+        }
+        if (!g.axis) return;
+        const travel = g.axis === 'row' ? dx : dy;
+        if (Math.abs(travel) < SHIFT_FIRE_PX) return;
+        this.shiftGesture = null;
+        this.performShift(g.axis, g.axis === 'row' ? g.cell.y : g.cell.x, travel > 0 ? 1 : -1);
+    }
+
+    performShift(axis, index, dir) {
+        const statsBefore = { linesCleared: this.stats.linesCleared, maxCombo: this.stats.maxCombo };
+        const outcome = this.model.shiftLine(axis, index, dir);
+        if (!outcome.ok) {
+            this.audio.playInvalid();
+            this.vibrate(20);
+            if (outcome.reason === 'nocharge') this.setStatus('No charges. Clear 3 lines to earn one.', 2);
+            else if (outcome.reason === 'nochange') this.setStatus('Nothing to slide there.', 1.6);
+            return false;
+        }
+        this.audio.unlockAndPlay();
+        this.audio.playPlacement();
+        this.statHistory.push(statsBefore);
+        const excess = this.statHistory.length - this.model.history.length;
+        if (excess > 0) this.statHistory.splice(0, excess);
+
+        const step = this.cellSize;
+        for (const move of outcome.moved) {
+            if (this.model.board[move.toY][move.toX] === -1) continue; // cleared by the slide
+            const targetX = this.boardRect.x + move.toX * step;
+            const targetY = this.boardRect.y + move.toY * step;
+            this.snapAnimations.set(`${move.toX},${move.toY}`, {
+                color: move.color,
+                slide: true,
+                elapsed: 0,
+                delay: 0,
+                duration: 0.11,
+                fromX: axis === 'row' ? targetX - dir * step : targetX,
+                fromY: axis === 'col' ? targetY - dir * step : targetY,
+                targetX,
+                targetY
+            });
+        }
+        if (outcome.cleared.length) this.spawnClearParticles(outcome.cleared);
+        if (outcome.lines > 0) {
+            this.audio.playClear(outcome.combo, outcome.lines);
+            this.showPraise(outcome.lines, outcome.combo);
+            this.stats.linesCleared += outcome.lines;
+            this.stats.maxCombo = Math.max(this.stats.maxCombo, outcome.combo);
+            if (outcome.lines >= 2 || outcome.combo >= 3) this.triggerShake(0.25, 10);
+        }
+        this.hapticForMove(outcome.lines, outcome.combo, false);
+        if (outcome.shift_gained > 0) this.setStatus('+1 Shift charge', 1.6);
+        if (this.model.isStuck()) this.finishRun('stuck');
+        return true;
     }
 
     dragLayout() {
@@ -180,6 +260,10 @@ export class GridShiftMain {
     }
 
     pointerUp(pos) {
+        if (this.shiftGesture) {
+            this.shiftGesture = null;
+            return;
+        }
         if (this.dragIndex >= 0) {
             const slot = this.dragIndex;
             this.dragPosition = pos;
@@ -227,7 +311,8 @@ export class GridShiftMain {
             if (name === 'modal_share') this.shareDaily();
             return;
         }
-        if (name === 'start_classic') this.startRun('classic');
+        if (name === 'start_shift') this.startRun('shift');
+        else if (name === 'start_classic') this.startRun('classic');
         else if (name === 'start_fever') this.startRun('fever');
         else if (name === 'start_daily') this.startRun('daily');
         else if (name === 'open_islands') this.screen = 'islands';
@@ -317,7 +402,9 @@ export class GridShiftMain {
             this.audio.setComboIntensity(0);
         }
         this.hapticForMove(outcome.lines, outcome.combo, Boolean(outcome.special));
+        if (outcome.shift_gained > 0) this.setStatus('+1 Shift charge', 1.6);
         if (this.model.isStuck()) this.finishRun('stuck');
+        else if (this.model.shiftEnabled && this.model.noPieceFits()) this.setStatus('No room! Swipe a row or column to slide it.', 3.2);
     }
 
     startRun(mode) {
@@ -343,7 +430,12 @@ export class GridShiftMain {
         this.audio.unlockAndPlay();
         this.audio.setComboIntensity(0);
         this.tutorialStep = (!this.tutorialDone && mode === 'classic') ? 0 : -1;
-        if (this.tutorialStep < 0) this.setStatus('Drag pieces onto the board. Clear lines to make space.', 3.2);
+        this.shiftGesture = null;
+        if (this.tutorialStep < 0) {
+            this.setStatus(mode === 'shift'
+                ? 'Swipe a row or column to slide it. Clear 3 lines to earn a charge.'
+                : 'Drag pieces onto the board. Clear lines to make space.', 3.6);
+        }
     }
 
     finishRun(reason) {
@@ -612,7 +704,7 @@ export class GridShiftMain {
             const data = JSON.parse(raw);
             this.crystals = Number(data.crystals) || 0;
             this.muted = Boolean(data.muted);
-            this.bestScores = { classic: 0, fever: 0, ...(data.bestScores || {}) };
+            this.bestScores = { classic: 0, fever: 0, shift: 0, ...(data.bestScores || {}) };
             this.islandLevels = Array.isArray(data.islandLevels)
                 ? data.islandLevels.slice(0, 3).map(v => Math.max(0, Math.min(ISLAND_MAX_LEVEL, Math.floor(Number(v) || 0))))
                 : [0, 0, 0];

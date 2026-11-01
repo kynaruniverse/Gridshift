@@ -29,6 +29,11 @@ export class GridShiftModel {
     // One weight per entry in SHAPES, same order. Higher means more common.
     static SHAPE_WEIGHTS = [3, 5, 5, 5, 6, 4, 4, 4, 3, 3, 2, 2, 2, 4, 2, 2, 2];
 
+    // Shift mode: slide a row or column one cell (wrapping) by spending a charge.
+    static SHIFT_START_CHARGES = 1;
+    static SHIFT_MAX_CHARGES = 3;
+    static SHIFT_LINES_PER_CHARGE = 3;
+
     // Turns text such as "gridshift:2026-10-31" into a stable 32-bit seed (FNV-1a).
     static seedFromString(text) {
         let hash = 2166136261;
@@ -52,6 +57,9 @@ export class GridShiftModel {
         this.seedBase = 0;
         this.trayCount = 0;
         this.rngState = 0;
+        this.shiftEnabled = false;
+        this.shiftCharges = 0;
+        this.shiftProgress = 0;
     }
 
     reset(newMode = "classic", seed = null) {
@@ -66,6 +74,9 @@ export class GridShiftModel {
         this.seeded = seed !== null;
         this.seedBase = this.seeded ? seed >>> 0 : 0;
         this.trayCount = 0;
+        this.shiftEnabled = newMode === 'shift';
+        this.shiftCharges = this.shiftEnabled ? GridShiftModel.SHIFT_START_CHARGES : 0;
+        this.shiftProgress = 0;
         this._dealTray();
     }
 
@@ -193,7 +204,9 @@ export class GridShiftModel {
             score: this.score,
             combo: this.combo,
             piecesPlaced: this.piecesPlaced,
-            trayCount: this.trayCount
+            trayCount: this.trayCount,
+            shiftCharges: this.shiftCharges,
+            shiftProgress: this.shiftProgress
         }));
         if (this.history.length > 5) this.history.shift();
     }
@@ -208,6 +221,8 @@ export class GridShiftModel {
         this.combo = snapshot.combo;
         this.piecesPlaced = snapshot.piecesPlaced;
         this.trayCount = snapshot.trayCount ?? this.trayCount;
+        this.shiftCharges = snapshot.shiftCharges ?? this.shiftCharges;
+        this.shiftProgress = snapshot.shiftProgress ?? this.shiftProgress;
         return true;
     }
 
@@ -261,6 +276,8 @@ export class GridShiftModel {
             this.score += lineCount * 100 + lineCount * Math.min(this.combo - 1, 4) * 30;
         }
 
+        const shiftGained = this._earnShiftCharges(lineCount);
+
         let batchComplete = true;
         for (const current of this.tray) {
             if (!current.used) batchComplete = false;
@@ -278,8 +295,133 @@ export class GridShiftModel {
             special: special,
             combo: this.combo,
             score: this.score,
-            batch_complete: batchComplete
+            batch_complete: batchComplete,
+            shift_gained: shiftGained
         };
+    }
+
+    _earnShiftCharges(lines) {
+        if (!this.shiftEnabled || lines <= 0) return 0;
+        this.shiftProgress += lines;
+        let gained = 0;
+        while (this.shiftProgress >= GridShiftModel.SHIFT_LINES_PER_CHARGE) {
+            this.shiftProgress -= GridShiftModel.SHIFT_LINES_PER_CHARGE;
+            if (this.shiftCharges < GridShiftModel.SHIFT_MAX_CHARGES) {
+                this.shiftCharges++;
+                gained++;
+            }
+        }
+        if (this.shiftCharges >= GridShiftModel.SHIFT_MAX_CHARGES) this.shiftProgress = 0;
+        return gained;
+    }
+
+    // Returns copies of the board and special board with one row or column slid by one
+    // cell (wrapping), or null if the slide would change nothing.
+    // dir is +1 (right or down) or -1 (left or up).
+    _shiftedBoards(axis, index, dir) {
+        const size = GridShiftModel.SIZE;
+        const at = i => (axis === 'row' ? { x: i, y: index } : { x: index, y: i });
+        const values = [];
+        const specials = [];
+        for (let i = 0; i < size; i++) {
+            const c = at(i);
+            values.push(this.board[c.y][c.x]);
+            specials.push(this.specialBoard[c.y][c.x]);
+        }
+        const from = i => (i - dir + size) % size;
+        const board = this.board.map(row => row.slice());
+        const specialBoard = this.specialBoard.map(row => row.slice());
+        let changed = false;
+        for (let i = 0; i < size; i++) {
+            const c = at(i);
+            board[c.y][c.x] = values[from(i)];
+            specialBoard[c.y][c.x] = specials[from(i)];
+            if (values[from(i)] !== values[i] || specials[from(i)] !== specials[i]) changed = true;
+        }
+        return changed ? { board, specialBoard } : null;
+    }
+
+    // Slides one row (axis "row") or column (axis "col") by one cell, wrapping around.
+    // Costs one charge. A slide that completes lines clears them and extends the combo;
+    // a slide that clears nothing leaves the combo alone.
+    shiftLine(axis, index, dir) {
+        const size = GridShiftModel.SIZE;
+        if (!this.shiftEnabled) return { ok: false, reason: 'disabled' };
+        if ((axis !== 'row' && axis !== 'col') || !Number.isInteger(index) || index < 0 || index >= size || (dir !== 1 && dir !== -1)) {
+            return { ok: false, reason: 'invalid' };
+        }
+        if (this.shiftCharges <= 0) return { ok: false, reason: 'nocharge' };
+        const next = this._shiftedBoards(axis, index, dir);
+        if (!next) return { ok: false, reason: 'nochange' };
+
+        this.saveSnapshot();
+        const moved = [];
+        for (let i = 0; i < size; i++) {
+            const from = axis === 'row' ? { x: i, y: index } : { x: index, y: i };
+            const value = this.board[from.y][from.x];
+            if (value === -1) continue;
+            const j = (i + dir + size) % size;
+            const to = axis === 'row' ? { x: j, y: index } : { x: index, y: j };
+            moved.push({ fromX: from.x, fromY: from.y, toX: to.x, toY: to.y, color: value });
+        }
+        this.board = next.board;
+        this.specialBoard = next.specialBoard;
+        this.shiftCharges--;
+
+        const settled = this.board.map(row => row.slice());
+        const linesData = this._clearFullLines();
+        const lines = linesData.lines;
+        const cleared = [];
+        for (let y = 0; y < size; y++) {
+            for (let x = 0; x < size; x++) {
+                if (settled[y][x] !== -1 && this.board[y][x] === -1) cleared.push({ x, y, color: settled[y][x] });
+            }
+        }
+        if (lines > 0) {
+            this.combo++;
+            this.score += linesData.cells * 10 + lines * 100 + lines * Math.min(this.combo - 1, 4) * 30;
+        }
+        const gained = this._earnShiftCharges(lines);
+        return {
+            ok: true,
+            lines,
+            line_cells: linesData.cells,
+            combo: this.combo,
+            score: this.score,
+            moved,
+            cleared,
+            shift_gained: gained,
+            charges: this.shiftCharges
+        };
+    }
+
+    // True when some single slide would let a tray piece fit or complete a line.
+    canRescueByShift() {
+        if (!this.shiftEnabled || this.shiftCharges <= 0) return false;
+        const size = GridShiftModel.SIZE;
+        const original = this.board;
+        try {
+            for (const axis of ['row', 'col']) {
+                for (let index = 0; index < size; index++) {
+                    for (const dir of [1, -1]) {
+                        const next = this._shiftedBoards(axis, index, dir);
+                        if (!next) continue;
+                        const hasLine = next.board.some(row => row.every(cell => cell !== -1))
+                            || [...Array(size).keys()].some(x => next.board.every(row => row[x] !== -1));
+                        if (hasLine) return true;
+                        this.board = next.board;
+                        if (this.canAnyPieceFit()) return true;
+                    }
+                }
+            }
+        } finally {
+            this.board = original;
+        }
+        return false;
+    }
+
+    noPieceFits() {
+        return !this.canAnyPieceFit();
     }
 
     _clearArea(center, radius) {
@@ -432,6 +574,7 @@ export class GridShiftModel {
     }
 
     isStuck() {
-        return !this.canAnyPieceFit();
+        if (this.canAnyPieceFit()) return false;
+        return !this.canRescueByShift();
     }
 }
