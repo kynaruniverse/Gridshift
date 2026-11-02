@@ -34,6 +34,12 @@ export class GridShiftModel {
     static SHIFT_MAX_CHARGES = 3;
     static SHIFT_LINES_PER_CHARGE = 3;
 
+    // Heat: every clear builds a score multiplier, and one free miss is allowed.
+    static HEAT_MAX = 8;
+    static HEAT_GRACE_MISSES = 1;
+    static HEAT_AFTER_SURGE = 5;
+    static SURGE_BONUS = 150;
+
     // Turns text such as "gridshift:2026-10-31" into a stable 32-bit seed (FNV-1a).
     static seedFromString(text) {
         let hash = 2166136261;
@@ -60,6 +66,8 @@ export class GridShiftModel {
         this.shiftEnabled = false;
         this.shiftCharges = 0;
         this.shiftProgress = 0;
+        this.heat = 1;
+        this.heatMisses = 0;
     }
 
     reset(newMode = "classic", seed = null) {
@@ -77,6 +85,8 @@ export class GridShiftModel {
         this.shiftEnabled = newMode === 'shift';
         this.shiftCharges = this.shiftEnabled ? GridShiftModel.SHIFT_START_CHARGES : 0;
         this.shiftProgress = 0;
+        this.heat = 1;
+        this.heatMisses = 0;
         this._dealTray();
     }
 
@@ -206,7 +216,9 @@ export class GridShiftModel {
             piecesPlaced: this.piecesPlaced,
             trayCount: this.trayCount,
             shiftCharges: this.shiftCharges,
-            shiftProgress: this.shiftProgress
+            shiftProgress: this.shiftProgress,
+            heat: this.heat,
+            heatMisses: this.heatMisses
         }));
         if (this.history.length > 5) this.history.shift();
     }
@@ -223,6 +235,8 @@ export class GridShiftModel {
         this.trayCount = snapshot.trayCount ?? this.trayCount;
         this.shiftCharges = snapshot.shiftCharges ?? this.shiftCharges;
         this.shiftProgress = snapshot.shiftProgress ?? this.shiftProgress;
+        this.heat = snapshot.heat ?? this.heat;
+        this.heatMisses = snapshot.heatMisses ?? this.heatMisses;
         return true;
     }
 
@@ -270,11 +284,13 @@ export class GridShiftModel {
         }
 
         const totalCleared = specialCleared + lineCells;
-        this.score += cells.length * 5;
-        if (totalCleared > 0) this.score += totalCleared * 10;
-        if (lineCount > 0) {
-            this.score += lineCount * 100 + lineCount * Math.min(this.combo - 1, 4) * 30;
-        }
+        const heatBefore = this.heat;
+        const surge = lineCount > 0 && heatBefore >= GridShiftModel.HEAT_MAX;
+        const sweep = surge ? this._surgeSweep() : [];
+        let gain = cells.length * 5 + (totalCleared + sweep.length) * 10 + lineCount * 100;
+        if (surge) gain += GridShiftModel.SURGE_BONUS;
+        this.score += gain * heatBefore;
+        this._updateHeat(lineCount, surge);
 
         const shiftGained = this._earnShiftCharges(lineCount);
 
@@ -296,8 +312,54 @@ export class GridShiftModel {
             combo: this.combo,
             score: this.score,
             batch_complete: batchComplete,
-            shift_gained: shiftGained
+            shift_gained: shiftGained,
+            heat: this.heat,
+            heat_before: heatBefore,
+            surge,
+            surge_cells: sweep
         };
+    }
+
+    // Clears build heat (two or more lines at once build it faster). A placement with no
+    // clear is a miss: the first one is free, each one after that cools heat by a step.
+    // Slides that clear nothing are not counted as misses.
+    _updateHeat(lines, surge) {
+        if (lines > 0) {
+            this.heat = surge
+                ? GridShiftModel.HEAT_AFTER_SURGE
+                : Math.min(GridShiftModel.HEAT_MAX, this.heat + (lines >= 2 ? 2 : 1));
+            this.heatMisses = 0;
+        } else {
+            this.heatMisses++;
+            if (this.heatMisses > GridShiftModel.HEAT_GRACE_MISSES) this.heat = Math.max(1, this.heat - 1);
+        }
+    }
+
+    // Surge: at full heat, the next clear also sweeps the fullest remaining row or column.
+    _surgeSweep() {
+        const size = GridShiftModel.SIZE;
+        const cellAt = (axis, index, i) => (axis === 'row' ? { x: i, y: index } : { x: index, y: i });
+        let best = null;
+        for (const axis of ['row', 'col']) {
+            for (let index = 0; index < size; index++) {
+                let count = 0;
+                for (let i = 0; i < size; i++) {
+                    const c = cellAt(axis, index, i);
+                    if (this.board[c.y][c.x] !== -1) count++;
+                }
+                if (count > 0 && (!best || count > best.count)) best = { axis, index, count };
+            }
+        }
+        const swept = [];
+        if (!best) return swept;
+        for (let i = 0; i < size; i++) {
+            const c = cellAt(best.axis, best.index, i);
+            if (this.board[c.y][c.x] === -1) continue;
+            swept.push({ x: c.x, y: c.y, color: this.board[c.y][c.x] });
+            this.board[c.y][c.x] = -1;
+            this.specialBoard[c.y][c.x] = GridShiftModel.SPECIAL_NONE;
+        }
+        return swept;
     }
 
     _earnShiftCharges(lines) {
@@ -371,6 +433,9 @@ export class GridShiftModel {
         const settled = this.board.map(row => row.slice());
         const linesData = this._clearFullLines();
         const lines = linesData.lines;
+        const heatBefore = this.heat;
+        const surge = lines > 0 && heatBefore >= GridShiftModel.HEAT_MAX;
+        const sweep = surge ? this._surgeSweep() : [];
         const cleared = [];
         for (let y = 0; y < size; y++) {
             for (let x = 0; x < size; x++) {
@@ -379,7 +444,10 @@ export class GridShiftModel {
         }
         if (lines > 0) {
             this.combo++;
-            this.score += linesData.cells * 10 + lines * 100 + lines * Math.min(this.combo - 1, 4) * 30;
+            let gain = (linesData.cells + sweep.length) * 10 + lines * 100;
+            if (surge) gain += GridShiftModel.SURGE_BONUS;
+            this.score += gain * heatBefore;
+            this._updateHeat(lines, surge);
         }
         const gained = this._earnShiftCharges(lines);
         return {
@@ -391,7 +459,11 @@ export class GridShiftModel {
             moved,
             cleared,
             shift_gained: gained,
-            charges: this.shiftCharges
+            charges: this.shiftCharges,
+            heat: this.heat,
+            heat_before: heatBefore,
+            surge,
+            surge_cells: sweep
         };
     }
 

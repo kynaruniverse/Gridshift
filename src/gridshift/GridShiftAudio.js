@@ -58,6 +58,14 @@ export class GridShiftAudio {
         if (!this._muted && this._musicStarted) this.unlockAndPlay();
     }
 
+    // Heat lifts the music: a little louder and a little faster as the multiplier climbs.
+    setHeat(heat) {
+        this._heat = Math.max(1, Math.min(8, Number(heat) || 1));
+        if (!this._music) return;
+        this._music.volume = 0.15 + (this._heat - 1) * 0.012;
+        try { this._music.playbackRate = 1 + (this._heat - 1) * 0.015; } catch (error) { /* unsupported */ }
+    }
+
     setComboIntensity(comboCount) {
         this._intensity = Math.max(0, Math.min(Number(comboCount) || 0, 5));
         if (!this._music) return;

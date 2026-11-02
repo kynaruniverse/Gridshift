@@ -72,7 +72,7 @@ test('Cloud City adds a small stage-based crystal reward multiplier', () => {
         applyCloudBonus: GridShiftMain.prototype.applyCloudBonus,
         perkLevel: GridShiftMain.prototype.perkLevel,
         saveProfile() {},
-        audio: { setComboIntensity() {} }
+        audio: { setComboIntensity() {}, setHeat() {} }
     };
     GridShiftMain.prototype.finishRun.call(game, 'stuck');
     assert.equal(game.crystalsEarned, 5); // 4 base crystals × 1.25 at stage 5

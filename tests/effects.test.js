@@ -45,7 +45,9 @@ test('clear particle effects stay capped and become lighter for reduced motion',
         particles: [],
         boardRect: { x: 56, y: 218 },
         cellSize: 76,
-        prefersReducedMotion: false
+        prefersReducedMotion: false,
+        model: { heat: 1 },
+        heatTier: GridShiftMain.prototype.heatTier
     };
     call('spawnClearParticles', game, cells);
     assert.equal(game.particles.length, 60);
@@ -55,7 +57,9 @@ test('clear particle effects stay capped and become lighter for reduced motion',
         particles: [],
         boardRect: { x: 56, y: 218 },
         cellSize: 76,
-        prefersReducedMotion: true
+        prefersReducedMotion: true,
+        model: { heat: 1 },
+        heatTier: GridShiftMain.prototype.heatTier
     };
     call('spawnClearParticles', reduced, cells.slice(0, 2));
     assert.equal(reduced.particles.length, 2);
@@ -64,8 +68,11 @@ test('clear particle effects stay capped and become lighter for reduced motion',
 
 test('clear haptics distinguish a combo from a single line', () => {
     const patterns = [];
-    const game = { vibrate: pattern => patterns.push(pattern) };
+    const game = { vibrate: pattern => patterns.push(pattern), model: { heat: 1 }, heatTier: GridShiftMain.prototype.heatTier };
     call('hapticClear', game, 1, 0);
     call('hapticClear', game, 3, 3);
     assert.deepEqual(patterns, [18, [22, 28, 22, 34, 42]]);
+    game.model.heat = 5;
+    call('hapticClear', game, 1, 0);
+    assert.deepEqual(patterns[2], [20, 24, 26, 24, 34, 24, 48]);
 });

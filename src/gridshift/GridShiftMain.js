@@ -26,6 +26,7 @@ export class GridShiftMain {
         this.dragStartClock = 0;
         this.canvasRect = null;
         this.shiftGesture = null;
+        this.flashTimer = 0;
         this.container.appendChild(this.canvas);
 
         this.screen = 'home';
@@ -197,6 +198,7 @@ export class GridShiftMain {
 
     performShift(axis, index, dir) {
         const statsBefore = { linesCleared: this.stats.linesCleared, maxCombo: this.stats.maxCombo };
+        const tierBefore = this.heatTier(this.model.heat);
         const outcome = this.model.shiftLine(axis, index, dir);
         if (!outcome.ok) {
             this.audio.playInvalid();
@@ -237,6 +239,7 @@ export class GridShiftMain {
             if (outcome.lines >= 2 || outcome.combo >= 3) this.triggerShake(0.25, 10);
         }
         this.hapticForMove(outcome.lines, outcome.combo, false);
+        this.heatFeedback(outcome, tierBefore);
         if (outcome.shift_gained > 0) this.setStatus('+1 Shift charge', 1.6);
         if (this.model.isStuck()) this.finishRun('stuck');
         return true;
@@ -368,6 +371,7 @@ export class GridShiftMain {
         })) || [];
         const pieceColor = piece?.color ?? 0;
         const statsBefore = { linesCleared: this.stats.linesCleared, maxCombo: this.stats.maxCombo };
+        const tierBefore = this.heatTier(this.model.heat);
         const outcome = this.model.placePiece(slot, origin);
         if (!outcome.ok) {
             this.audio.playInvalid();
@@ -399,9 +403,10 @@ export class GridShiftMain {
                 this.triggerShake(0.25, 10);
             }
         } else {
-            this.audio.setComboIntensity(0);
+            this.audio.setHeat(1);
         }
         this.hapticForMove(outcome.lines, outcome.combo, Boolean(outcome.special));
+        this.heatFeedback(outcome, tierBefore);
         if (outcome.shift_gained > 0) this.setStatus('+1 Shift charge', 1.6);
         if (this.model.isStuck()) this.finishRun('stuck');
         else if (this.model.shiftEnabled && this.model.noPieceFits()) this.setStatus('No room! Swipe a row or column to slide it.', 3.2);
@@ -428,7 +433,7 @@ export class GridShiftMain {
         this.screen = 'game';
         this.modal = '';
         this.audio.unlockAndPlay();
-        this.audio.setComboIntensity(0);
+        this.audio.setHeat(1);
         this.tutorialStep = (!this.tutorialDone && mode === 'classic') ? 0 : -1;
         this.shiftGesture = null;
         if (this.tutorialStep < 0) {
@@ -465,7 +470,7 @@ export class GridShiftMain {
         this.saveProfile();
         this.modal = 'results';
         this.endReason = reason;
-        this.audio.setComboIntensity(0);
+        this.audio.setHeat(1);
     }
 
     restoreIsland(index) {
@@ -615,8 +620,29 @@ export class GridShiftMain {
         }
     }
 
+    heatTier(heat) { return heat >= 8 ? 3 : heat >= 5 ? 2 : heat >= 3 ? 1 : 0; }
+
+    // Shared by placements and slides: heat audio, tier-up callouts and the Surge burst.
+    heatFeedback(outcome, tierBefore) {
+        this.audio.setHeat(this.model.heat);
+        if (outcome.surge) {
+            this.praise = { text: `SURGE ×${outcome.heat_before}!`, start: this.clock };
+            this.flashTimer = 0.35;
+            this.triggerShake(0.4, 16);
+            this.vibrate([30, 30, 30, 30, 90]);
+            return;
+        }
+        const tier = this.heatTier(this.model.heat);
+        if (tier > tierBefore && outcome.lines > 0) {
+            this.praise = { text: `HEAT ×${this.model.heat}`, start: this.clock };
+        } else if (tier < tierBefore) {
+            this.setStatus('Heat cooling down. Clear a line to build it back.', 1.8);
+        }
+    }
+
     hapticClear(lines, combo) {
-        if (combo >= 3) this.vibrate([22, 28, 22, 34, 42]);
+        if (this.heatTier(this.model.heat) >= 2) this.vibrate([20, 24, 26, 24, 34, 24, 48]);
+        else if (combo >= 3) this.vibrate([22, 28, 22, 34, 42]);
         else if (lines >= 3) this.vibrate([24, 34, 32]);
         else if (lines === 2) this.vibrate([18, 28, 22]);
         else this.vibrate(18);
@@ -664,8 +690,9 @@ export class GridShiftMain {
 
     spawnClearParticles(cells) {
         const colors = ['#4dcbb4', '#f28da9', '#a987db', '#f3ba50', '#9bcf59', '#66a9e8'];
-        const count = this.prefersReducedMotion ? 1 : 3;
-        const room = Math.max(0, 60 - this.particles.length);
+        const tier = this.heatTier(this.model.heat);
+        const count = this.prefersReducedMotion ? 1 : 3 + tier;
+        const room = Math.max(0, 60 + tier * 12 - this.particles.length);
         const cap = this.particles.length + room;
         for (const cell of cells.slice(0, 24)) {
             for (let i = 0; i < count && this.particles.length < cap; i++) {
@@ -679,7 +706,7 @@ export class GridShiftMain {
                     gravity: 170,
                     age: 0,
                     life: this.prefersReducedMotion ? 0.28 : 0.52 + Math.random() * 0.18,
-                    radius: 2 + Math.random() * 3,
+                    radius: (2 + Math.random() * 3) * (1 + tier * 0.2),
                     color: colors[cell.color % colors.length]
                 });
             }
@@ -760,6 +787,7 @@ export class GridShiftMain {
         this.statusTimer = Math.max(0, this.statusTimer - delta);
         this.checkSpecialTips();
         this.shakeTimer = Math.max(0, this.shakeTimer - delta);
+        this.flashTimer = Math.max(0, this.flashTimer - delta);
         for (const [key, animation] of this.snapAnimations) {
             animation.elapsed += delta;
             if (animation.elapsed >= animation.delay + animation.duration) this.snapAnimations.delete(key);
