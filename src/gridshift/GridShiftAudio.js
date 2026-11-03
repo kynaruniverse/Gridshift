@@ -78,15 +78,9 @@ export class GridShiftAudio {
     playUndo() { this._playTone(246.94, 0.16, 0.25, 493.88); }
     playButton() { this._playTone(440, 0.05, 0.14, 523.25); }
 
-    playSpecial(specialId) {
-        if (specialId === 1) {
-            this._playTone(130.81, 0.18, 0.24, 65.41);
-            this._playTone(392, 0.12, 0.14, 523.25);
-        } else if (specialId === 2) {
-            this._playTone(783.99, 0.15, 0.18, 1046.5);
-        } else if (specialId === 3) {
-            this._playTone(659.25, 0.19, 0.18, 1046.5);
-        }
+    playContract() {
+        this._playTone(659.25, 0.16, 0.2, 783.99);
+        this._playTone(987.77, 0.24, 0.16, 1174.66);
     }
 
     playClear(comboCount, lines) {

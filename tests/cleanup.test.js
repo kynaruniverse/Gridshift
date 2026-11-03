@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { GridShiftAudio } from '../src/gridshift/GridShiftAudio.js';
 import { GridShiftMain } from '../src/gridshift/GridShiftMain.js';
 
-test('a move selects exactly one ordinary, special, or clear haptic', () => {
+test('a move selects exactly one ordinary or clear haptic', () => {
     const pulses = [];
     const game = {
         vibrate: pattern => pulses.push(pattern),
@@ -11,11 +11,10 @@ test('a move selects exactly one ordinary, special, or clear haptic', () => {
     };
     const hapticForMove = GridShiftMain.prototype.hapticForMove;
 
-    hapticForMove.call(game, 0, 0, false);
-    hapticForMove.call(game, 0, 0, true);
-    hapticForMove.call(game, 2, 1, true);
+    hapticForMove.call(game, 0, 0);
+    hapticForMove.call(game, 2, 1);
 
-    assert.deepEqual(pulses, [12, [18, 30, 24], 'clear:2:1']);
+    assert.deepEqual(pulses, [12, 'clear:2:1']);
 });
 
 test('music has no source at initialization and loads only when playback is requested', () => {
@@ -57,24 +56,38 @@ test('music has no source at initialization and loads only when playback is requ
 });
 
 
-test('Cloud City adds a small stage-based crystal reward multiplier', () => {
+test('finishing a run records the best score, saves, and opens the results window', () => {
+    let saved = 0;
+    let heat = null;
     const game = {
         model: { score: 2600 },
-        islandLevels: [0, 0, 5],
-        mode: 'classic',
+        mode: 'shift',
         runFinalized: false,
-        stats: { linesCleared: 0, maxCombo: 0, totalCrystalsEarned: 0 },
-        achievementsUnlocked: {},
-        crystals: 0,
-        bestScores: { classic: 0, fever: 0 },
-        cloudCarry: 0,
-        cloudBonusEarned: 0,
-        applyCloudBonus: GridShiftMain.prototype.applyCloudBonus,
-        perkLevel: GridShiftMain.prototype.perkLevel,
-        saveProfile() {},
-        audio: { setComboIntensity() {}, setHeat() {} }
+        tutorialStep: -1,
+        bestScores: { classic: 0, shift: 900, daily: 0 },
+        saveProfile() { saved++; },
+        audio: { setHeat: value => { heat = value; } }
     };
     GridShiftMain.prototype.finishRun.call(game, 'stuck');
-    assert.equal(game.crystalsEarned, 5); // 4 base crystals × 1.25 at stage 5
-    assert.equal(game.crystals, 5);
+    assert.equal(game.bestScores.shift, 2600);
+    assert.equal(game.modal, 'results');
+    assert.equal(game.endReason, 'stuck');
+    assert.equal(saved, 1);
+    assert.equal(heat, 1);
+    GridShiftMain.prototype.finishRun.call(game, 'stuck');
+    assert.equal(saved, 1, 'a finished run is only recorded once');
+});
+
+test('a lower score never replaces the best score', () => {
+    const game = {
+        model: { score: 500 },
+        mode: 'classic',
+        runFinalized: false,
+        tutorialStep: -1,
+        bestScores: { classic: 900, shift: 0, daily: 0 },
+        saveProfile() {},
+        audio: { setHeat() {} }
+    };
+    GridShiftMain.prototype.finishRun.call(game, 'stuck');
+    assert.equal(game.bestScores.classic, 900);
 });

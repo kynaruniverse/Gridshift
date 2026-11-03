@@ -3,13 +3,12 @@ import assert from 'node:assert/strict';
 import { GridShiftModel } from '../src/gridshift/GridShiftModel.js';
 import { GridShiftMain } from '../src/gridshift/GridShiftMain.js';
 
-const dot = used => ({ cells: [{ x: 0, y: 0 }], color: 0, special: 0, used });
+const dot = used => ({ cells: [{ x: 0, y: 0 }], color: 0, used });
 
 function setup(mode = 'classic') {
     const model = new GridShiftModel();
     model.reset(mode);
     model.board = model._emptyBoard(-1);
-    model.specialBoard = model._emptyBoard(GridShiftModel.SPECIAL_NONE);
     model.tray = [dot(false), dot(false), dot(false)];
     return model;
 }
@@ -42,7 +41,7 @@ test('a clear raises heat by one, and two lines at once raise it by two', () => 
     double.board[1][6] = -1;
     double.board[0][7] = 1;
     double.board[1][7] = 1;
-    double.tray = [{ cells: [{ x: 0, y: 0 }, { x: 0, y: 1 }], color: 0, special: 0, used: false }, dot(true), dot(true)];
+    double.tray = [{ cells: [{ x: 0, y: 0 }, { x: 0, y: 1 }], color: 0, used: false }, dot(true), dot(true)];
     const doubleResult = double.placePiece(0, { x: 6, y: 0 });
     assert.equal(doubleResult.lines, 2);
     assert.equal(double.heat, 3);
@@ -119,7 +118,7 @@ test('heat never goes above the maximum', () => {
     model.board[1][6] = -1;
     model.board[0][7] = 1;
     model.board[1][7] = 1;
-    model.tray = [{ cells: [{ x: 0, y: 0 }, { x: 0, y: 1 }], color: 0, special: 0, used: false }, dot(true), dot(true)];
+    model.tray = [{ cells: [{ x: 0, y: 0 }, { x: 0, y: 1 }], color: 0, used: false }, dot(true), dot(true)];
     model.placePiece(0, { x: 6, y: 0 });
     assert.equal(model.heat, GridShiftModel.HEAT_MAX);
 });

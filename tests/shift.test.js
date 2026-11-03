@@ -7,7 +7,6 @@ function shiftModel() {
     const model = new GridShiftModel();
     model.reset('shift');
     model.board = model._emptyBoard(-1);
-    model.specialBoard = model._emptyBoard(GridShiftModel.SPECIAL_NONE);
     return model;
 }
 
@@ -51,15 +50,6 @@ test('a row slides left and a column slides down and up', () => {
     model.shiftLine('col', 6, -1);
     assert.equal(model.board[0][6], 1);
     assert.equal(model.board[7][6], 2);
-});
-
-test('special markers slide with their tiles', () => {
-    const model = shiftModel();
-    model.board[1][0] = 2;
-    model.specialBoard[1][0] = GridShiftModel.SPECIAL_BOMB;
-    model.shiftLine('row', 1, 1);
-    assert.equal(model.specialBoard[1][1], GridShiftModel.SPECIAL_BOMB);
-    assert.equal(model.specialBoard[1][0], GridShiftModel.SPECIAL_NONE);
 });
 
 test('rejected slides spend nothing', () => {
@@ -117,7 +107,7 @@ test('every third cleared line earns a charge, capped at three', () => {
 test('placing a piece that clears lines can earn a charge', () => {
     const model = shiftModel();
     model.shiftProgress = 2;
-    model.tray = [{ cells: [{ x: 0, y: 0 }], color: 0, special: 0, used: false }, { cells: [{ x: 0, y: 0 }], color: 0, special: 0, used: true }, { cells: [{ x: 0, y: 0 }], color: 0, special: 0, used: true }];
+    model.tray = [{ cells: [{ x: 0, y: 0 }], color: 0, used: false }, { cells: [{ x: 0, y: 0 }], color: 0, used: true }, { cells: [{ x: 0, y: 0 }], color: 0, used: true }];
     for (let x = 1; x < 8; x++) model.board[0][x] = 1;
     const result = model.placePiece(0, { x: 0, y: 0 });
     assert.equal(result.lines, 1);
@@ -139,7 +129,7 @@ function checkerboard(model) {
     for (let y = 0; y < 8; y++) {
         for (let x = 0; x < 8; x++) model.board[y][x] = (x + y) % 2 === 0 ? 1 : -1;
     }
-    model.tray = [{ cells: [{ x: 0, y: 0 }, { x: 0, y: 1 }], color: 0, special: 0, used: false }];
+    model.tray = [{ cells: [{ x: 0, y: 0 }, { x: 0, y: 1 }], color: 0, used: false }];
 }
 
 test('a stuck board is not game over while a slide can rescue it', () => {

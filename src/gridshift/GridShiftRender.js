@@ -1,3 +1,6 @@
+import { contractLabel, isDone } from './GridShiftContracts.js';
+import { THEMES, SKINS, isUnlocked, nextUnlock, unlockLabel } from './GridShiftUnlocks.js';
+
 // GridShift renderer: chunky arcade look.
 // Flat fills, thick dark outlines, hard offset shadows. Nothing is blurred or glowing,
 // and every tile and panel is drawn in code, so the game ships without any image files.
@@ -6,8 +9,14 @@ const W = 720, H = 1280, CELL = 76, BOARD_Y = 180;
 const FONT = '"Nunito", system-ui, sans-serif';
 const DISPLAY_FONT = '"Lilita One", "Baloo 2", "Arial Black", system-ui, sans-serif';
 
-// Tile colour ids 0..5. Particles in GridShiftMain use the same list.
-export const TILE_COLORS = ['#FF5A5F', '#FF9F1C', '#FFD23F', '#34D17C', '#3D8BFF', '#9B5DE5'];
+// Tile colour ids 0..5 for each tile skin. Particles in GridShiftMain use the same lists.
+const SKIN_COLORS = {
+    primary: ['#FF5A5F', '#FF9F1C', '#FFD23F', '#34D17C', '#3D8BFF', '#9B5DE5'],
+    candy: ['#FF6FA5', '#FFA96B', '#FFE066', '#5EDDB1', '#66B8FF', '#B58CFF'],
+    retro: ['#E8604C', '#E5A823', '#2E9C8F', '#8E4A7F', '#8A9A3B', '#5E9BC8']
+};
+export const skinColors = id => SKIN_COLORS[id] || SKIN_COLORS.primary;
+const TIER_COLORS = ['', '#34D17C', '#FFD23F', '#FF5A5F'];
 const HEAT_COLORS = ['#3D8BFF', '#FFD23F', '#FF9F1C', '#FF5A5F'];
 const INK = '#2A2240';
 
@@ -56,6 +65,7 @@ export const renderMethods = {
         }
         this.drawBackdrop();
         if (this.screen === 'game') this.renderGame();
+        else if (this.screen === 'locker') this.renderLocker();
         else this.renderHome();
         if (this.modal) this.renderModal();
         c.restore();
@@ -253,8 +263,9 @@ export const renderMethods = {
     },
 
     // ---------------------------------------------------------------- tiles
-    tileSprite(color) {
-        const key = ((color % 6) + 6) % 6;
+    tileSprite(color, skin = this.tileSkin) {
+        const index = ((color % 6) + 6) % 6;
+        const key = `${skin}:${index}`;
         this.tileCache = this.tileCache || {};
         if (!this.tileCache[key]) {
             const S = 160, oc = document.createElement('canvas');
@@ -265,7 +276,7 @@ export const renderMethods = {
             g.fillStyle = INK;
             rr(g, bx, by + drop, bw, bh, r);
             g.fill();
-            g.fillStyle = TILE_COLORS[key];
+            g.fillStyle = skinColors(skin)[index];
             rr(g, bx, by, bw, bh, r);
             g.fill();
             g.save();
@@ -286,11 +297,11 @@ export const renderMethods = {
         return this.tileCache[key];
     },
 
-    drawTile(x, y, size, color, alpha = 1) {
+    drawTile(x, y, size, color, alpha = 1, skin = this.tileSkin) {
         const c = this.ctx;
         c.save();
         c.globalAlpha = alpha;
-        c.drawImage(this.tileSprite(color), x, y, size, size);
+        c.drawImage(this.tileSprite(color, skin), x, y, size, size);
         c.restore();
     },
 
@@ -451,6 +462,7 @@ export const renderMethods = {
         const p = this.palette();
         const letters = 'GRIDSHIFT';
         const c = this.ctx;
+        const colors = skinColors(this.tileSkin);
         c.save();
         c.font = `400 86px ${DISPLAY_FONT}`;
         const widths = [...letters].map(ch => c.measureText(ch).width + 2);
@@ -459,36 +471,37 @@ export const renderMethods = {
         let lx = W / 2 - total / 2;
         for (let i = 0; i < letters.length; i++) {
             const bob = Math.sin(this.clock * 2.2 + i * 0.6) * 3;
-            this.title(letters[i], lx + widths[i] / 2, 118 + bob, 86, TILE_COLORS[i % 6], true);
+            this.title(letters[i], lx + widths[i] / 2, 118 + bob, 86, colors[i % 6], true);
             lx += widths[i];
         }
         this.display('THE BLOCK PUZZLE WHERE YOU SLIDE THE BOARD', W / 2, 196, 19, p.ink, 'center', 620);
 
         this.drawButton('sound_toggle', { x: 18, y: 18, width: 104, height: 52 }, this.muted ? 'SOUND OFF' : 'SOUND ON', p.panel, 'secondary', 14);
-        this.drawButton('toggle_theme', { x: 598, y: 18, width: 104, height: 52 }, this.themeName(), p.panel, 'secondary', 16);
+        this.drawPill(560, 20, 142, 46, `★ ${this.stars}`, p.panel, p.ink);
 
         this.drawHero({ x: 48, y: 232, width: 624, height: 292 });
 
         this.drawButton('start_shift', { x: 58, y: 560, width: 604, height: 94 }, 'PLAY SHIFT', p.accent, 'primary', 36);
         this.drawButton('start_classic', { x: 58, y: 676, width: 194, height: 74 }, 'CLASSIC', p.panel, 'secondary', 21);
-        this.drawButton('start_fever', { x: 263, y: 676, width: 194, height: 74 }, 'FEVER · 2M', p.panel, 'secondary', 21);
-        this.drawButton('start_daily', { x: 468, y: 676, width: 194, height: 74 }, this.dailyLabel(), p.panel, 'secondary', 18);
+        this.drawButton('start_daily', { x: 263, y: 676, width: 194, height: 74 }, this.dailyLabel(), p.panel, 'secondary', 18);
+        this.drawButton('open_locker', { x: 468, y: 676, width: 194, height: 74 }, 'LOCKER', p.panel, 'secondary', 21);
 
         this.display('BEST SCORES', W / 2, 800, 17, p.muted);
         this.drawPill(58, 820, 190, 48, `SHIFT  ${this.bestScores.shift || 0}`);
         this.drawPill(265, 820, 190, 48, `CLASSIC  ${this.bestScores.classic || 0}`);
-        this.drawPill(472, 820, 190, 48, `FEVER  ${this.bestScores.fever || 0}`);
+        this.drawPill(472, 820, 190, 48, `DAILY  ${this.bestScores.daily || 0}`);
 
-        const how = { x: 58, y: 906, width: 604, height: 236 };
+        const how = { x: 58, y: 890, width: 604, height: 292 };
         this.panel(how, p.panel, 28, true);
         this.display('HOW IT WORKS', W / 2, how.y + 38, 24, p.ink);
         const rows = [
-            ['DRAG pieces onto the board and fill rows or columns.', TILE_COLORS[3]],
-            ['SWIPE a row or column to slide it. Clear 3 lines for a charge.', TILE_COLORS[4]],
-            ['CLEAR lines back to back to build HEAT up to ×8.', TILE_COLORS[0]]
+            ['DRAG pieces onto the board and fill rows or columns.', colors[3]],
+            ['SWIPE a row or column to slide it. Clear 3 lines for a charge.', colors[4]],
+            ['CLEAR lines back to back to build HEAT up to ×8.', colors[0]],
+            ['FINISH 3 contracts each run to earn ★ and unlock new looks.', colors[2]]
         ];
         rows.forEach((row, i) => {
-            const cy = how.y + 92 + i * 56;
+            const cy = how.y + 90 + i * 52;
             c.save();
             c.beginPath();
             c.arc(how.x + 44, cy, 19, 0, Math.PI * 2);
@@ -498,18 +511,21 @@ export const renderMethods = {
             c.strokeStyle = p.ink;
             c.stroke();
             c.restore();
-            this.display(String(i + 1), how.x + 44, cy + 1, 22, '#fff');
+            this.display(String(i + 1), how.x + 44, cy + 1, 22, i === 3 ? p.ink : '#fff');
             this.text(row[0], how.x + 78, cy, 17, p.ink, 800, 'left', how.width - 100);
         });
 
-        this.drawPill(210, 1172, 300, 52, `✦  ${this.crystals} CRYSTALS`, p.panel, p.ink);
+        const next = nextUnlock(this.stars);
+        this.drawPill(150, 1206, 420, 50, next ? `NEXT: ${unlockLabel(next)}  ·  ${next.stars}★` : 'EVERYTHING UNLOCKED!', p.panel, p.ink);
     },
+
 
     // A looping mini board: one row at a time slides a cell, with wraparound.
     drawHero(r) {
         const c = this.ctx, p = this.palette();
         this.panel(r, p.slot, 32, true);
         const size = 52, cols = 8, rowsN = 5;
+        const heroColors = skinColors(this.tileSkin);
         const gx = r.x + (r.width - cols * size) / 2, gy = r.y + (r.height - rowsN * size) / 2;
         const SLIDE = 2.6;
         const cycle = Math.floor(this.clock / SLIDE);
@@ -552,7 +568,7 @@ export const renderMethods = {
         this.panel({ x: 32, y: 18, width: 656, height: 144 }, p.panel, 28, true);
         this.display('SCORE', W / 2, 46, 16, p.muted);
         this.title(String(this.model.score), W / 2, 86, 54, p.ink);
-        const canUndo = this.model.history.length > 0 && this.crystals >= 2;
+        const canUndo = this.model.history.length > 0 && this.undosLeft > 0;
         this.drawButton('pause', { x: 44, y: 32, width: 84, height: 88 }, 'Ⅱ', p.panel, 'secondary', 25);
         this.drawButton('undo_move', { x: 592, y: 32, width: 84, height: 88 }, 'UNDO', p.panel, 'secondary', 15);
         if (!canUndo) {
@@ -562,13 +578,24 @@ export const renderMethods = {
             c.fill();
             c.restore();
         }
+        if (this.undosLeft > 0) {
+            c.save();
+            c.beginPath();
+            c.arc(668, 40, 15, 0, Math.PI * 2);
+            c.fillStyle = p.gold;
+            c.fill();
+            c.lineWidth = 3;
+            c.strokeStyle = p.ink;
+            c.stroke();
+            c.restore();
+            this.display(String(this.undosLeft), 668, 41, 17, p.ink);
+        }
         const best = (this.mode === 'daily' ? this.dailyBestToday() : this.bestScores[this.mode]) || 0;
         this.drawPill(140, 121, 196, 32, `BEST  ${best}`, p.panel, p.muted);
         if (this.model.shiftEnabled) {
             this.drawShiftMeter(376, 119, 230, 36);
         } else {
-            const mode = this.mode === 'fever' ? `FEVER · ${Math.ceil(this.secondsLeft)}s` : this.mode === 'daily' ? 'DAILY RUN' : 'CLASSIC';
-            this.drawPill(396, 121, 196, 32, mode, p.panel, this.mode === 'fever' ? '#E0702F' : p.ink);
+            this.drawPill(396, 121, 196, 32, 'CLASSIC', p.panel, p.ink);
         }
 
         const b = this.boardRect;
@@ -647,8 +674,42 @@ export const renderMethods = {
             piece.cells.forEach(a => this.drawTile(ox + a.x * size, oy + a.y * size, size, piece.color));
             c.restore();
         }
+        this.drawContractChips(1238);
         this.drawPraise();
         if (drag) this.drawHeldPiece(drag);
+    },
+
+    // One chip per contract along the bottom: fills as you progress, turns green when done.
+    drawContractChips(y) {
+        const c = this.ctx, p = this.palette();
+        (this.contracts || []).forEach((contract, i) => {
+            const x = 30 + i * 224, w = 212, h = 34;
+            const done = isDone(contract);
+            const age = contract.doneAt === undefined ? 9 : this.clock - contract.doneAt;
+            const grow = age < 0.6 ? 4 * (1 - age / 0.6) : 0;
+            c.save();
+            c.fillStyle = p.panel;
+            rr(c, x - grow, y - grow, w + grow * 2, h + grow * 2, h / 2);
+            c.fill();
+            const frac = Math.max(0, Math.min(1, contract.progress / contract.target));
+            if (frac > 0) {
+                c.save();
+                rr(c, x - grow, y - grow, w + grow * 2, h + grow * 2, h / 2);
+                c.clip();
+                c.fillStyle = done ? '#34D17C' : TIER_COLORS[contract.tier];
+                c.globalAlpha = done ? 1 : 0.8;
+                c.fillRect(x - grow, y - grow, (w + grow * 2) * frac, h + grow * 2);
+                c.restore();
+            }
+            c.lineWidth = 3;
+            c.strokeStyle = p.ink;
+            rr(c, x - grow + 1.5, y - grow + 1.5, w + grow * 2 - 3, h + grow * 2 - 3, h / 2);
+            c.stroke();
+            c.restore();
+            const showNumbers = contract.type !== 'score' && contract.target <= 30;
+            const label = done ? `✓ ${contractLabel(contract)}` : `${contractLabel(contract)}${showNumbers ? `  ${contract.progress}/${contract.target}` : ''}`;
+            this.display(label, x + w / 2, y + h / 2 + 1, 15, p.ink, 'center', w - 26);
+        });
     },
 
     drawTutorial(y) {
@@ -795,24 +856,157 @@ export const renderMethods = {
         c.fillStyle = 'rgba(42,34,64,.55)';
         c.fillRect(0, 0, W, H);
         const daily = this.modal === 'results' && this.mode === 'daily';
-        const r = { x: 72, y: daily ? 307 : 360, width: 576, height: daily ? 630 : 524 };
+        const unlocks = this.modal === 'results' ? this.newUnlocks.length : 0;
+        let height = 650;
+        if (this.modal === 'results') height = 640 + (unlocks ? 56 : 0) + (daily ? 100 : 0);
+        const r = { x: 72, y: Math.round((H - height) / 2), width: 576, height };
         this.panel(r, p.panel, 36, true);
-        this.title(this.modal === 'paused' ? 'TAKE A BREATHER' : 'RUN COMPLETE', W / 2, r.y + 78, 50, p.ink);
+        this.title(this.modal === 'paused' ? 'TAKE A BREATHER' : 'RUN COMPLETE', W / 2, r.y + 76, 50, p.ink);
         if (this.modal === 'results') {
-            this.display('FINAL SCORE', W / 2, r.y + 150, 20, p.muted);
-            this.title(String(this.model.score), W / 2, r.y + 208, 70, p.accent, true);
-            this.drawPill(190, r.y + 250, 340, 48, `✦  ${this.crystalsEarned} CRYSTALS EARNED`, p.slot, p.ink);
-            this.drawButton('modal_restart', { x: 126, y: r.y + 326, width: 468, height: 76 }, 'PLAY AGAIN', p.accent, 'primary', 26);
-            if (daily) {
-                this.drawButton('modal_share', { x: 126, y: r.y + 416, width: 468, height: 68 }, 'SHARE RESULT', p.gold, 'primary', 22);
-                this.display(`TODAY'S BEST  ${this.daily.best}  ·  STREAK  ${this.currentStreak()}`, W / 2, r.y + 596, 19, p.muted, 'center', 520);
+            this.display('FINAL SCORE', W / 2, r.y + 136, 20, p.muted);
+            this.title(String(this.model.score), W / 2, r.y + 190, 66, p.accent, true);
+            this.drawContractRows(r.x + 36, r.y + 244, r.width - 72);
+            let cy = r.y + 404;
+            this.drawPill(150, cy, 420, 46, this.runStars > 0 ? `+${this.runStars} ★ EARNED  ·  ${this.stars} TOTAL` : `NO STARS THIS RUN  ·  ${this.stars} TOTAL`, p.slot, p.ink);
+            cy += 54;
+            if (unlocks) {
+                this.drawPill(120, cy, 480, 46, `NEW UNLOCK: ${unlockLabel(this.newUnlocks[0])}`, p.gold, p.ink);
+                cy += 56;
             }
-            this.drawButton('modal_home', { x: 126, y: r.y + (daily ? 498 : 416), width: 468, height: 68 }, 'HOME', p.panel, 'secondary', 22);
+            cy += 12;
+            this.drawButton('modal_restart', { x: 126, y: cy, width: 468, height: 76 }, 'PLAY AGAIN', p.accent, 'primary', 26);
+            cy += 90;
+            if (daily) {
+                this.drawButton('modal_share', { x: 126, y: cy, width: 468, height: 68 }, 'SHARE RESULT', p.gold, 'primary', 22);
+                cy += 82;
+            }
+            this.drawButton('modal_home', { x: 126, y: cy, width: 468, height: 68 }, 'HOME', p.panel, 'secondary', 22);
+            if (daily) this.display(`TODAY'S BEST  ${this.daily.best}  ·  STREAK  ${this.currentStreak()}`, W / 2, cy + 98, 19, p.muted, 'center', 520);
         } else {
-            this.text('The board will wait for you.', W / 2, r.y + 150, 19, p.muted, 800);
-            this.drawButton('modal_resume', { x: 126, y: r.y + 200, width: 468, height: 76 }, 'KEEP PLAYING', p.accent, 'primary', 26);
-            this.drawButton('modal_restart', { x: 126, y: r.y + 296, width: 468, height: 68 }, 'START OVER', p.panel, 'secondary', 22);
-            this.drawButton('modal_home', { x: 126, y: r.y + 384, width: 468, height: 68 }, 'HOME', p.panel, 'secondary', 22);
+            this.text('The board will wait for you.', W / 2, r.y + 130, 19, p.muted, 800);
+            this.drawContractRows(r.x + 36, r.y + 170, r.width - 72);
+            this.drawButton('modal_resume', { x: 126, y: r.y + 340, width: 468, height: 76 }, 'KEEP PLAYING', p.accent, 'primary', 26);
+            this.drawButton('modal_restart', { x: 126, y: r.y + 436, width: 468, height: 68 }, 'START OVER', p.panel, 'secondary', 22);
+            this.drawButton('modal_home', { x: 126, y: r.y + 524, width: 468, height: 68 }, 'HOME', p.panel, 'secondary', 22);
         }
-    }
+    },
+
+    // The three contracts as rows: tier badge, goal, and a tick or progress.
+    drawContractRows(x, y, w) {
+        const c = this.ctx, p = this.palette();
+        (this.contracts || []).forEach((contract, i) => {
+            const ry = y + i * 50, done = isDone(contract);
+            c.save();
+            c.fillStyle = done ? 'rgba(52,209,124,.28)' : p.slot;
+            rr(c, x, ry, w, 42, 21);
+            c.fill();
+            c.lineWidth = 3;
+            c.strokeStyle = p.ink;
+            rr(c, x + 1.5, ry + 1.5, w - 3, 39, 20);
+            c.stroke();
+            c.beginPath();
+            c.arc(x + 25, ry + 21, 15, 0, Math.PI * 2);
+            c.fillStyle = TIER_COLORS[contract.tier];
+            c.fill();
+            c.stroke();
+            c.restore();
+            this.display(`${contract.stars}`, x + 25, ry + 22, 18, p.ink);
+            this.display(contractLabel(contract), x + 52, ry + 22, 19, p.ink, 'left', w - 160);
+            const showNumbers = contract.type !== 'score' && contract.target <= 30;
+            this.display(done ? '✓ DONE' : (showNumbers ? `${contract.progress}/${contract.target}` : `★${contract.stars}`), x + w - 18, ry + 22, 19, done ? '#1F9D5B' : p.muted, 'right');
+        });
+    },
+
+    // ---------------------------------------------------------------- locker
+    renderLocker() {
+        const c = this.ctx, p = this.palette();
+        this.drawButton('back_home', { x: 18, y: 18, width: 120, height: 60 }, 'BACK', p.panel, 'secondary', 20);
+        this.title('LOCKER', W / 2, 74, 64, p.gold, true);
+        this.drawPill(210, 128, 300, 50, `★ ${this.stars} STARS`, p.panel, p.ink);
+        const next = nextUnlock(this.stars);
+        this.display(next ? `NEXT UNLOCK: ${unlockLabel(next)} AT ${next.stars}★` : 'EVERYTHING IS UNLOCKED!', W / 2, 210, 19, p.muted, 'center', 640);
+
+        this.display('BOARD THEMES', W / 2, 262, 24, p.ink);
+        THEMES.forEach((item, i) => this.drawLockerCard('theme', item, 36 + i * 216, 288, 200, 230));
+        this.display('TILE SKINS', W / 2, 572, 24, p.ink);
+        SKINS.forEach((item, i) => this.drawLockerCard('skin', item, 36 + i * 216, 598, 200, 230));
+
+        const how = { x: 58, y: 868, width: 604, height: 236 };
+        this.panel(how, p.panel, 28, true);
+        this.display('HOW STARS WORK', W / 2, how.y + 38, 24, p.ink);
+        const lines = [
+            ['Every run brings 3 new contracts.', null],
+            ['EASY gives 1★, MEDIUM 2★, HARD 3★.', null],
+            ['Finish a contract and the stars are yours, even if you lose.', null],
+            ['Unlocks change how the game looks, never how it plays.', null]
+        ];
+        lines.forEach((line, i) => this.text(line[0], W / 2, how.y + 92 + i * 36, 17, p.ink, 800, 'center', how.width - 50));
+        this.drawStatus(1180, '');
+    },
+
+    drawLockerCard(kind, item, x, y, w, h) {
+        const c = this.ctx, p = this.palette();
+        const equipped = kind === 'theme' ? this.theme === item.id : this.tileSkin === item.id;
+        const open = isUnlocked(item, this.stars);
+        this.panel({ x, y, width: w, height: h }, p.panel, 24, true);
+        if (equipped) {
+            c.save();
+            c.lineWidth = 7;
+            c.strokeStyle = p.gold;
+            rr(c, x - 5, y - 5, w + 10, h + 10, 28);
+            c.stroke();
+            c.lineWidth = 4;
+            c.strokeStyle = p.ink;
+            rr(c, x + 2, y + 2, w - 4, h - 4, 22);
+            c.stroke();
+            c.restore();
+        }
+        const area = { x: x + 14, y: y + 14, width: w - 28, height: 118 };
+        c.save();
+        rr(c, area.x, area.y, area.width, area.height, 14);
+        c.clip();
+        if (kind === 'theme') {
+            const pal = { classic: { bg: '#FFF1D0', slot: '#F7E4B9', edge: '#E9D09A' }, vaporwave: { bg: '#FFE0EC', slot: '#FBD5E3', edge: '#EDB4CA' }, cyberpunk: { bg: '#DDF6E6', slot: '#CBECD8', edge: '#A8D6BC' } }[item.id];
+            c.fillStyle = pal.bg;
+            c.fillRect(area.x, area.y, area.width, area.height);
+            for (let gy = 0; gy < 3; gy++) {
+                for (let gx = 0; gx < 4; gx++) {
+                    c.fillStyle = pal.edge;
+                    rr(c, area.x + 14 + gx * 38, area.y + 12 + gy * 32, 32, 26, 8);
+                    c.fill();
+                }
+            }
+            const colors = skinColors(this.tileSkin);
+            [[0, 1, 0], [1, 1, 4], [2, 2, 2], [3, 0, 3]].forEach(([gx, gy, ci]) => {
+                this.drawTile(area.x + 14 + gx * 38 - 3, area.y + 12 + gy * 32 - 3, 38, ci, 1, this.tileSkin);
+            });
+        } else {
+            c.fillStyle = p.slot;
+            c.fillRect(area.x, area.y, area.width, area.height);
+            for (let k = 0; k < 6; k++) {
+                this.drawTile(area.x + 8 + (k % 3) * 52, area.y + 10 + Math.floor(k / 3) * 52, 52, k, 1, item.id);
+            }
+        }
+        c.restore();
+        this.display(item.name, x + w / 2, y + 160, 24, p.ink, 'center', w - 24);
+        if (!open) {
+            c.save();
+            c.fillStyle = 'rgba(42,34,64,.5)';
+            rr(c, area.x, area.y, area.width, area.height, 14);
+            c.fill();
+            c.fillStyle = p.panel;
+            rr(c, x + w / 2 - 22, area.y + 54, 44, 34, 8);
+            c.fill();
+            c.lineWidth = 5;
+            c.strokeStyle = p.panel;
+            c.beginPath();
+            c.arc(x + w / 2, area.y + 54, 14, Math.PI, 0);
+            c.stroke();
+            c.restore();
+            this.display(`${item.stars}★ TO UNLOCK`, x + w / 2, y + 198, 17, p.muted, 'center', w - 20);
+        } else {
+            this.display(equipped ? 'IN USE ✓' : 'TAP TO USE', x + w / 2, y + 198, 17, equipped ? '#1F9D5B' : p.muted, 'center', w - 20);
+        }
+        this.buttonHits[`${kind}_${item.id}`] = { x, y, width: w, height: h };
+    },
 };

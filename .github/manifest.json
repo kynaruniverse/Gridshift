@@ -1,0 +1,15 @@
+{
+  "name": "GridShift",
+  "short_name": "GridShift",
+  "description": "The block puzzle where you can slide the board.",
+  "categories": ["games"],
+  "start_url": "./index.html",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#FFF1D0",
+  "theme_color": "#FFF1D0",
+  "icons": [
+    { "src": "assets/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}

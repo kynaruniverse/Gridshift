@@ -1,4 +1,4 @@
-const CACHE = 'gridshift-v8';
+const CACHE = 'gridshift-v9';
 const CORE = [
     './',
     './index.html',
@@ -6,6 +6,8 @@ const CORE = [
     './manifest.json',
     './src/main.js',
     './src/gridshift/GridShiftAudio.js',
+    './src/gridshift/GridShiftContracts.js',
+    './src/gridshift/GridShiftUnlocks.js',
     './src/gridshift/GridShiftMain.js',
     './src/gridshift/GridShiftModel.js',
     './src/gridshift/GridShiftRender.js',

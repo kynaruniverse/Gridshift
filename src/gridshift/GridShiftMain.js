@@ -1,11 +1,12 @@
 import { GridShiftModel } from './GridShiftModel.js';
-import { TILE_COLORS } from './GridShiftRender.js';
+import { skinColors } from './GridShiftRender.js';
+import {
+    makeContracts, updateContracts, seededRandom, snapshotProgress, restoreProgress
+} from './GridShiftContracts.js';
+import { findTheme, findSkin, isUnlocked, newlyUnlocked, unlockLabel } from './GridShiftUnlocks.js';
 
-const SHIFT_LOCK_PX = 14; // movement before the swipe picks a row or a column
-const SHIFT_FIRE_PX = 40; // movement along that line that triggers the slide
-
-// Three tiers of five stages. Stages past the first tier give half-strength perks.
-const ISLAND_MAX_LEVEL = 15;
+const SHIFT_LOCK_PX = 14;  // movement before the swipe picks a row or a column
+const SHIFT_FIRE_PX = 40;  // movement along that line that triggers the slide
 
 export class GridShiftMain {
     constructor(model, audio, containerElement) {
@@ -33,20 +34,18 @@ export class GridShiftMain {
         this.screen = 'home';
         this.modal = '';
         this.mode = 'classic';
-        this.secondsLeft = 120;
-        this.crystals = 0;
-        this.crystalsEarned = 0;
-        this.bestScores = { classic: 0, fever: 0, shift: 0 };
-        this.islandLevels = [0, 0, 0];
-        this.stats = { linesCleared: 0, maxCombo: 0, totalCrystalsEarned: 0 };
+        this.bestScores = { classic: 0, shift: 0, daily: 0 };
+        this.stats = { linesCleared: 0, maxCombo: 0 };
         this.statHistory = [];
-        this.achievementsUnlocked = {};
-        this.cloudCarry = 0;
+        this.stars = 0;
+        this.contracts = [];
+        this.runStars = 0;
+        this.newUnlocks = [];
+        this.undosLeft = 1;
+        this.tileSkin = 'primary'; // 'primary', 'candy', 'retro'
         this.daily = { date: '', best: 0, claimed: false, streak: 0, bestStreak: 0, lastDate: '' };
         this.runDailyKey = '';
-        this.cloudBonusEarned = 0;
         this.theme = 'classic'; // 'classic', 'vaporwave', 'cyberpunk'
-        this.unlockedThemes = { classic: true, vaporwave: false, cyberpunk: false };
         this.muted = false;
         this.tutorialDone = false;
         this.tutorialStep = -1;
@@ -173,7 +172,7 @@ export class GridShiftMain {
     }
 
     performShift(axis, index, dir) {
-        const statsBefore = { linesCleared: this.stats.linesCleared, maxCombo: this.stats.maxCombo };
+        const statsBefore = { linesCleared: this.stats.linesCleared, maxCombo: this.stats.maxCombo, contracts: snapshotProgress(this.contracts) };
         const tierBefore = this.heatTier(this.model.heat);
         const outcome = this.model.shiftLine(axis, index, dir);
         if (!outcome.ok) {
@@ -214,9 +213,10 @@ export class GridShiftMain {
             this.stats.maxCombo = Math.max(this.stats.maxCombo, outcome.combo);
             if (outcome.lines >= 2 || outcome.combo >= 3) this.triggerShake(0.25, 10);
         }
-        this.hapticForMove(outcome.lines, outcome.combo, false);
+        this.hapticForMove(outcome.lines, outcome.combo);
         this.heatFeedback(outcome, tierBefore);
         if (outcome.shift_gained > 0) this.setStatus('+1 Shift charge', 1.6);
+        this.recordMove('slide', outcome);
         if (this.model.isStuck()) this.finishRun('stuck');
         return true;
     }
@@ -292,25 +292,17 @@ export class GridShiftMain {
         }
         if (name === 'start_shift') this.startRun('shift');
         else if (name === 'start_classic') this.startRun('classic');
-        else if (name === 'start_fever') this.startRun('fever');
         else if (name === 'start_daily') this.startRun('daily');
-        else if (name === 'open_islands') this.screen = 'islands';
+        else if (name === 'open_locker') this.screen = 'locker';
         else if (name === 'tutorial_skip') this.endTutorial();
-        else if (name === 'toggle_theme') {
-            const themes = ['classic', 'vaporwave', 'cyberpunk'];
-            const nextIdx = (themes.indexOf(this.theme) + 1) % themes.length;
-            this.theme = themes[nextIdx];
-            this.setStatus(`Theme switched to ${this.themeName()}`, 1.5);
-            this.saveProfile();
-        }
-        else if (name === 'back_home' || name === 'islands_home') this.goHome();
+        else if (name.startsWith('theme_')) this.equipTheme(name.slice(6));
+        else if (name.startsWith('skin_')) this.equipSkin(name.slice(5));
+        else if (name === 'back_home') this.goHome();
         else if (name === 'undo_move') {
             this.handleUndo();
         } else if (name === 'pause') {
             this.modal = 'paused';
             this.audio.pauseMusic();
-        } else if (name.startsWith('restore_')) {
-            this.restoreIsland(Number(name.slice(-1)));
         }
     }
 
@@ -319,9 +311,8 @@ export class GridShiftMain {
             this.setStatus('No moves to undo.', 1.5);
             return;
         }
-        const cost = 2;
-        if (this.crystals < cost) {
-            this.setStatus(`Need ${cost} Aether Crystals to Undo!`, 2.0);
+        if (this.undosLeft <= 0) {
+            this.setStatus('No undos left this run.', 1.8);
             return;
         }
         if (this.model.undo()) {
@@ -329,12 +320,12 @@ export class GridShiftMain {
             if (previous) {
                 this.stats.linesCleared = previous.linesCleared;
                 this.stats.maxCombo = previous.maxCombo;
+                restoreProgress(this.contracts, previous.contracts);
             }
-            this.crystals -= cost;
-            this.saveProfile();
+            this.undosLeft--;
             this.audio.playUndo();
             this.vibrate(40);
-            this.setStatus('Move undone! (-2 Crystals)', 1.8);
+            this.setStatus('Move undone. No undos left this run.', 1.8);
         }
     }
 
@@ -346,7 +337,7 @@ export class GridShiftMain {
             localX: cell.x, localY: cell.y
         })) || [];
         const pieceColor = piece?.color ?? 0;
-        const statsBefore = { linesCleared: this.stats.linesCleared, maxCombo: this.stats.maxCombo };
+        const statsBefore = { linesCleared: this.stats.linesCleared, maxCombo: this.stats.maxCombo, contracts: snapshotProgress(this.contracts) };
         const tierBefore = this.heatTier(this.model.heat);
         const outcome = this.model.placePiece(slot, origin);
         if (!outcome.ok) {
@@ -377,9 +368,10 @@ export class GridShiftMain {
         } else {
             this.audio.setHeat(1);
         }
-        this.hapticForMove(outcome.lines, outcome.combo, Boolean(outcome.special));
+        this.hapticForMove(outcome.lines, outcome.combo);
         this.heatFeedback(outcome, tierBefore);
         if (outcome.shift_gained > 0) this.setStatus('+1 Shift charge', 1.6);
+        this.recordMove('place', outcome);
         if (this.model.isStuck()) this.finishRun('stuck');
         else if (this.model.shiftEnabled && this.model.noPieceFits()) this.setStatus('No room! Swipe a row or column to slide it.', 3.2);
     }
@@ -387,19 +379,18 @@ export class GridShiftMain {
     startRun(mode) {
         this.mode = mode;
         let seed = null;
+        let rand = Math.random;
         if (mode === 'daily') {
             this.runDailyKey = this.dailyKey();
             seed = GridShiftModel.seedFromString(`gridshift:${this.runDailyKey}`);
+            rand = seededRandom(GridShiftModel.seedFromString(`contracts:${this.runDailyKey}`));
         }
-        this.model.reset(mode === 'daily' ? 'classic' : mode, seed);
-        this.secondsLeft = 120;
-
-        // Prismatic Falls Perk: +150 starting score per restored stage
-        const prismaticLevel = this.perkLevel(1);
-        // Not applied to the daily, so scores stay comparable between players.
-        if (prismaticLevel > 0 && mode !== 'daily') this.model.score = prismaticLevel * 150;
-
-        this.crystalsEarned = 0;
+        // The Daily plays by Shift rules, with the same pieces and contracts for everyone.
+        this.model.reset(mode === 'classic' ? 'classic' : 'shift', seed);
+        this.contracts = makeContracts(mode === 'classic' ? 'classic' : 'shift', rand);
+        this.runStars = 0;
+        this.newUnlocks = [];
+        this.undosLeft = 1;
         this.runFinalized = false;
         this.statHistory = [];
         this.screen = 'game';
@@ -409,9 +400,9 @@ export class GridShiftMain {
         this.tutorialStep = (!this.tutorialDone && mode === 'classic') ? 0 : -1;
         this.shiftGesture = null;
         if (this.tutorialStep < 0) {
-            this.setStatus(mode === 'shift'
-                ? 'Swipe a row or column to slide it. Clear 3 lines to earn a charge.'
-                : 'Drag pieces onto the board. Clear lines to make space.', 3.6);
+            this.setStatus(mode === 'classic'
+                ? 'Drag pieces onto the board. Finish contracts to earn stars.'
+                : 'Swipe a row or column to slide it. Finish contracts to earn stars.', 3.6);
         }
     }
 
@@ -419,25 +410,9 @@ export class GridShiftMain {
         if (this.runFinalized) return;
         this.runFinalized = true;
         if (this.tutorialStep >= 0) this.endTutorial();
-        
-        const baseCrystals = this.model.score <= 0 ? 0 : Math.min(50, Math.max(1, Math.floor(this.model.score / 650)));
-        const skyHavenBonus = Math.floor(this.perkLevel(0));
-        this.cloudBonusEarned = 0;
-        // Only the first daily run of each day earns the 2x bonus.
-        const multiplier = this.mode === 'daily' && !this.dailyClaimed(this.runDailyKey) ? 2 : 1;
-        this.crystalsEarned = baseCrystals > 0
-            ? this.applyCloudBonus((baseCrystals + skyHavenBonus) * multiplier)
-            : 0;
-        
-        this.crystals += this.crystalsEarned;
-        this.stats.totalCrystalsEarned += this.crystalsEarned;
+
         this.bestScores[this.mode] = Math.max(this.bestScores[this.mode] || 0, this.model.score);
         if (this.mode === 'daily') this.recordDaily();
-        
-        // Check Achievements
-        if (this.stats.linesCleared >= 20) this.achievementsUnlocked['lines_20'] = true;
-        if (this.stats.maxCombo >= 3) this.achievementsUnlocked['combo_3'] = true;
-        if (this.crystals >= 50) this.achievementsUnlocked['crystals_50'] = true;
 
         this.saveProfile();
         this.modal = 'results';
@@ -445,33 +420,56 @@ export class GridShiftMain {
         this.audio.setHeat(1);
     }
 
-    restoreIsland(index) {
-        const level = this.islandLevels[index] || 0;
-        if (level >= ISLAND_MAX_LEVEL) {
-            this.setStatus('That island is fully restored.', 1.8);
-            return;
+    // Called after every successful move: advances contracts and awards stars as soon as
+    // a contract is done, so quitting mid-run never loses them.
+    recordMove(kind, outcome) {
+        const finished = updateContracts(this.contracts, {
+            kind,
+            lines: outcome.lines,
+            combo: outcome.combo,
+            heat: this.model.heat,
+            score: this.model.score,
+            surge: Boolean(outcome.surge)
+        });
+        if (!finished.length) return;
+        const before = this.stars;
+        let earned = 0;
+        for (const contract of finished) {
+            contract.doneAt = this.clock;
+            earned += contract.stars;
         }
-        const cost = this.islandCost(level);
-        if (this.crystals < cost) {
-            this.setStatus(`You need ${cost} crystals for the next stage.`, 2);
-            return;
-        }
-        this.crystals -= cost;
-        this.islandLevels[index] = level + 1;
+        this.stars += earned;
+        this.runStars += earned;
+        const unlocked = newlyUnlocked(before, this.stars);
+        this.newUnlocks.push(...unlocked);
         this.saveProfile();
-        this.setStatus((level + 1) % 5 === 0 ? 'Tier complete! A new tier is open.' : 'Island restored. Your progress is saved.', 2);
+        this.audio.playContract();
+        this.vibrate([25, 40, 25]);
+        this.setStatus(unlocked.length
+            ? `NEW UNLOCK: ${unlockLabel(unlocked[0])}!`
+            : `Contract complete! +${earned} star${earned === 1 ? '' : 's'}`, unlocked.length ? 3.4 : 2.4);
     }
 
-    islandCost(level) { return 3 + level * 2; }
+    equipTheme(id) {
+        const item = findTheme(id);
+        if (!item) return;
+        if (!isUnlocked(item, this.stars)) {
+            this.setStatus(`${item.stars - this.stars} more stars to unlock ${item.name}.`, 2);
+            return;
+        }
+        this.theme = id;
+        this.saveProfile();
+    }
 
-    islandMax() { return ISLAND_MAX_LEVEL; }
-
-    islandTier(level) { return Math.min(2, Math.floor(level / 5)); }
-
-    // Perk strength: full value for the first five stages, half value after that.
-    perkLevel(index) {
-        const level = Math.max(0, Math.min(ISLAND_MAX_LEVEL, Number(this.islandLevels?.[index]) || 0));
-        return level <= 5 ? level : 5 + (level - 5) * 0.5;
+    equipSkin(id) {
+        const item = findSkin(id);
+        if (!item) return;
+        if (!isUnlocked(item, this.stars)) {
+            this.setStatus(`${item.stars - this.stars} more stars to unlock ${item.name} tiles.`, 2);
+            return;
+        }
+        this.tileSkin = id;
+        this.saveProfile();
     }
 
     dailyKey() { return new Date().toISOString().slice(0, 10); }
@@ -549,16 +547,6 @@ export class GridShiftMain {
         this.saveProfile();
     }
 
-    applyCloudBonus(amount) {
-        const percent = 5 * this.perkLevel(2);
-        if (percent <= 0) return amount;
-        const total = amount * percent + (this.cloudCarry || 0);
-        const whole = Math.floor(total / 100);
-        this.cloudCarry = total % 100;
-        this.cloudBonusEarned = whole;
-        return amount + whole;
-    }
-
     goHome() {
         this.screen = 'home';
         this.modal = '';
@@ -604,9 +592,9 @@ export class GridShiftMain {
         else this.vibrate(18);
     }
 
-    hapticForMove(lines, combo, special = false) {
+    hapticForMove(lines, combo) {
         if (lines > 0) this.hapticClear(lines, combo);
-        else this.vibrate(special ? [18, 30, 24] : 12);
+        else this.vibrate(12);
     }
 
     animatePlacedCells(cells, color, releaseLayout) {
@@ -618,7 +606,7 @@ export class GridShiftMain {
             this.snapAnimations.set(`${cell.x},${cell.y}`, {
                 color,
                 elapsed: 0,
-                delay: index * 0.018,
+                delay: index * 0.01,
                 duration,
                 fromX: releaseLayout ? releaseLayout.left + cell.localX * releaseLayout.size : targetX,
                 fromY: releaseLayout ? releaseLayout.top + cell.localY * releaseLayout.size : targetY - 26,
@@ -645,7 +633,7 @@ export class GridShiftMain {
     }
 
     spawnClearParticles(cells) {
-        const colors = TILE_COLORS;
+        const colors = skinColors(this.tileSkin);
         const tier = this.heatTier(this.model.heat);
         const count = this.prefersReducedMotion ? 1 : 3 + tier;
         const room = Math.max(0, 60 + tier * 12 - this.particles.length);
@@ -685,23 +673,23 @@ export class GridShiftMain {
             const raw = localStorage.getItem('gridshift_profile');
             if (!raw) return;
             const data = JSON.parse(raw);
-            this.crystals = Number(data.crystals) || 0;
             this.muted = Boolean(data.muted);
-            this.bestScores = { classic: 0, fever: 0, shift: 0, ...(data.bestScores || {}) };
-            this.islandLevels = Array.isArray(data.islandLevels)
-                ? data.islandLevels.slice(0, 3).map(v => Math.max(0, Math.min(ISLAND_MAX_LEVEL, Math.floor(Number(v) || 0))))
-                : [0, 0, 0];
-            while (this.islandLevels.length < 3) this.islandLevels.push(0);
+            const best = data.bestScores || {};
+            this.bestScores = {
+                classic: Math.max(0, Number(best.classic) || 0),
+                shift: Math.max(0, Number(best.shift) || 0),
+                daily: Math.max(0, Number(best.daily) || 0)
+            };
             this.stats = {
                 linesCleared: Number(data.stats?.linesCleared) || 0,
-                maxCombo: Number(data.stats?.maxCombo) || 0,
-                totalCrystalsEarned: Number(data.stats?.totalCrystalsEarned) || 0
+                maxCombo: Number(data.stats?.maxCombo) || 0
             };
-            this.achievementsUnlocked = data.achievementsUnlocked || {};
-            this.cloudCarry = Math.max(0, Math.min(99, Math.floor(Number(data.cloudCarry) || 0)));
-            this.theme = ['classic', 'vaporwave', 'cyberpunk'].includes(data.theme) ? data.theme : 'classic';
+            this.stars = Math.max(0, Math.floor(Number(data.stars) || 0));
+            const theme = findTheme(data.theme);
+            this.theme = theme && isUnlocked(theme, this.stars) ? theme.id : 'classic';
+            const skin = findSkin(data.tileSkin);
+            this.tileSkin = skin && isUnlocked(skin, this.stars) ? skin.id : 'primary';
             this.tutorialDone = data.tutorialDone === true || Object.values(this.bestScores).some(score => score > 0);
-            this.unlockedThemes = { classic: true, ...(data.unlockedThemes || {}) };
             const d = data.daily && typeof data.daily === 'object' ? data.daily : {};
             this.daily = {
                 date: typeof d.date === 'string' ? d.date : '',
@@ -719,15 +707,12 @@ export class GridShiftMain {
     saveProfile() {
         try {
             localStorage.setItem('gridshift_profile', JSON.stringify({
-                crystals: this.crystals,
                 muted: this.muted,
                 bestScores: this.bestScores,
-                islandLevels: this.islandLevels,
                 stats: this.stats,
-                achievementsUnlocked: this.achievementsUnlocked,
-                cloudCarry: this.cloudCarry,
+                stars: this.stars,
                 theme: this.theme,
-                unlockedThemes: this.unlockedThemes,
+                tileSkin: this.tileSkin,
                 tutorialDone: this.tutorialDone,
                 daily: this.daily
             }));
@@ -753,10 +738,6 @@ export class GridShiftMain {
             particle.vx *= Math.pow(0.94, delta * 60);
         }
         this.particles = this.particles.filter(particle => particle.age < particle.life);
-        if (this.screen === 'game' && !this.modal && this.mode === 'fever') {
-            this.secondsLeft = Math.max(0, this.secondsLeft - delta);
-            if (this.secondsLeft <= 0) this.finishRun('time');
-        }
     }
 
     triggerShake(duration = 0.3, intensity = 12) {

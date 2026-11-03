@@ -1,0 +1,12 @@
+{
+  "name": "gridshift-break-and-build",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Mobile-first GridShift browser game",
+  "scripts": {
+    "dev": "python3 -m http.server 4173",
+    "check": "node --check src/main.js && node --check src/gridshift/GridShiftMain.js && node --check src/gridshift/GridShiftModel.js && node --check src/gridshift/GridShiftAudio.js && node --check src/gridshift/GridShiftRender.js && node --check src/gridshift/GridShiftContracts.js && node --check src/gridshift/GridShiftUnlocks.js && node --check sw.js",
+    "test": "node --test"
+  }
+}

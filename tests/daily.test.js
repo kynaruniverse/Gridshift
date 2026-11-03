@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { GridShiftModel } from '../src/gridshift/GridShiftModel.js';
 import { GridShiftMain } from '../src/gridshift/GridShiftMain.js';
 
-const signature = tray => JSON.stringify(tray.map(p => [p.cells, p.color, p.special]));
+const signature = tray => JSON.stringify(tray.map(p => [p.cells, p.color]));
 const seed = key => GridShiftModel.seedFromString(`gridshift:${key}`);
 
 test('the same daily seed deals the same trays however the player places pieces', () => {
@@ -45,7 +45,7 @@ test('different days deal different trays', () => {
 test('undo restores the tray counter so the next tray is unchanged', () => {
     const model = new GridShiftModel();
     model.reset('classic', seed('2026-10-31'));
-    model.tray = [0, 1, 2].map(i => ({ cells: [{ x: 0, y: 0 }], color: i, special: 0, used: false }));
+    model.tray = [0, 1, 2].map(i => ({ cells: [{ x: 0, y: 0 }], color: i, used: false }));
     model.placePiece(0, { x: 0, y: 0 });
     model.placePiece(1, { x: 1, y: 0 });
     model.placePiece(2, { x: 2, y: 0 });
