@@ -162,34 +162,14 @@ export class GridShiftModel {
         for (let i = 0; i < 3; i++) {
             const shapeIndex = this._pickShapeIndex(crowd, taken);
             taken.add(shapeIndex);
-            let special = GridShiftModel.SPECIAL_NONE;
-            if (this._random() < 0.05) special = Math.floor(this._random() * 3) + 1;
             tray.push({
                 cells: JSON.parse(JSON.stringify(GridShiftModel.SHAPES[shapeIndex])),
                 color: Math.floor(this._random() * GridShiftModel.COLOR_IDS),
-                special,
+                special: GridShiftModel.SPECIAL_NONE,
                 used: false
             });
         }
         return tray;
-    }
-
-    _legacyDealTray() {
-        this.tray = [];
-        for (let i = 0; i < 3; i++) {
-            const shapeIndex = Math.floor(Math.random() * GridShiftModel.SHAPES.length);
-            const shape = JSON.parse(JSON.stringify(GridShiftModel.SHAPES[shapeIndex]));
-            let special = GridShiftModel.SPECIAL_NONE;
-            if (Math.random() < 0.05) {
-                special = Math.floor(Math.random() * 3) + 1;
-            }
-            this.tray.push({
-                cells: shape,
-                color: Math.floor(Math.random() * GridShiftModel.COLOR_IDS),
-                special: special,
-                used: false
-            });
-        }
     }
 
     canPlace(cells, origin) {

@@ -1,4 +1,4 @@
-const CACHE = 'gridshift-v7';
+const CACHE = 'gridshift-v8';
 const CORE = [
     './',
     './index.html',
@@ -11,20 +11,7 @@ const CORE = [
     './src/gridshift/GridShiftRender.js',
     './assets/icons/icon-192.png',
     './assets/icons/icon-512.png',
-    './assets/share/favicon.png',
-    './assets/islands/sky_haven.webp',
-    './assets/islands/prismatic_falls.webp',
-    './assets/islands/neon_cyber_city.webp',
-    './assets/runtime/clear_burst.webp',
-    './assets/runtime/special_bomb.webp',
-    './assets/runtime/special_lightning.webp',
-    './assets/runtime/special_prism.webp',
-    './assets/runtime/tile_blue.webp',
-    './assets/runtime/tile_cyan.webp',
-    './assets/runtime/tile_gold.webp',
-    './assets/runtime/tile_lime.webp',
-    './assets/runtime/tile_pink.webp',
-    './assets/runtime/tile_violet.webp'
+    './assets/share/favicon.png'
 ];
 
 self.addEventListener('install', event => {

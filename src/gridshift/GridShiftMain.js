@@ -1,4 +1,5 @@
 import { GridShiftModel } from './GridShiftModel.js';
+import { TILE_COLORS } from './GridShiftRender.js';
 
 const SHIFT_LOCK_PX = 14; // movement before the swipe picks a row or a column
 const SHIFT_FIRE_PX = 40; // movement along that line that triggers the slide
@@ -48,7 +49,6 @@ export class GridShiftMain {
         this.unlockedThemes = { classic: true, vaporwave: false, cyberpunk: false };
         this.muted = false;
         this.tutorialDone = false;
-        this.seenSpecials = {};
         this.tutorialStep = -1;
 
         this.runFinalized = false;
@@ -67,34 +67,10 @@ export class GridShiftMain {
         this.snapAnimations = new Map();
         this.particles = [];
         this.prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches || false;
-        this.assets = {};
-        this.loadAssets();
         this.initCanvasSize();
         this.bindEvents();
         this.loadProfile();
         this.audio.setMuted(this.muted);
-    }
-
-    loadAssets() {
-        const files = {
-            tile0: './assets/runtime/tile_cyan.webp',
-            tile1: './assets/runtime/tile_pink.webp',
-            tile2: './assets/runtime/tile_violet.webp',
-            tile3: './assets/runtime/tile_gold.webp',
-            tile4: './assets/runtime/tile_lime.webp',
-            tile5: './assets/runtime/tile_blue.webp',
-            special1: './assets/runtime/special_bomb.webp',
-            special2: './assets/runtime/special_lightning.webp',
-            special3: './assets/runtime/special_prism.webp',
-            island0: './assets/islands/sky_haven.webp',
-            island1: './assets/islands/prismatic_falls.webp',
-            island2: './assets/islands/neon_cyber_city.webp'
-        };
-        for (const [key, src] of Object.entries(files)) {
-            const image = new Image();
-            image.onload = () => { this.assets[key] = image; };
-            image.src = src;
-        }
     }
 
     initCanvasSize() {
@@ -389,10 +365,6 @@ export class GridShiftMain {
         this.tutorialAdvance('placed');
         const clearedCells = this.findClearedCells(beforeBoard, placedCells, pieceColor);
         if (clearedCells.length) this.spawnClearParticles(clearedCells);
-        if (outcome.special) {
-            this.audio.playSpecial(outcome.special);
-            this.triggerShake(0.35, 14);
-        }
         if (outcome.lines > 0) {
             this.audio.playClear(outcome.combo, outcome.lines);
             this.showPraise(outcome.lines, outcome.combo);
@@ -564,22 +536,6 @@ export class GridShiftMain {
         }
     }
 
-    checkSpecialTips() {
-        if (this.screen !== 'game' || this.modal || this.tutorialStep >= 0 || this.statusTimer > 0) return;
-        const tips = {
-            1: 'Bomb: clears a 3×3 area around its middle.',
-            2: 'Lightning: clears the row and column through it.',
-            3: 'Prism: fills gaps in nearly full lines it touches.'
-        };
-        for (const piece of this.model.tray) {
-            if (!piece || piece.used || !piece.special || this.seenSpecials[piece.special]) continue;
-            this.seenSpecials[piece.special] = true;
-            this.setStatus(tips[piece.special], 4.5);
-            this.saveProfile();
-            return;
-        }
-    }
-
     tutorialAdvance(event) {
         if (this.tutorialStep < 0) return;
         if (this.tutorialStep === 0 && event === 'placed') this.tutorialStep = 1;
@@ -689,7 +645,7 @@ export class GridShiftMain {
     }
 
     spawnClearParticles(cells) {
-        const colors = ['#4dcbb4', '#f28da9', '#a987db', '#f3ba50', '#9bcf59', '#66a9e8'];
+        const colors = TILE_COLORS;
         const tier = this.heatTier(this.model.heat);
         const count = this.prefersReducedMotion ? 1 : 3 + tier;
         const room = Math.max(0, 60 + tier * 12 - this.particles.length);
@@ -745,7 +701,6 @@ export class GridShiftMain {
             this.cloudCarry = Math.max(0, Math.min(99, Math.floor(Number(data.cloudCarry) || 0)));
             this.theme = ['classic', 'vaporwave', 'cyberpunk'].includes(data.theme) ? data.theme : 'classic';
             this.tutorialDone = data.tutorialDone === true || Object.values(this.bestScores).some(score => score > 0);
-            this.seenSpecials = data.seenSpecials && typeof data.seenSpecials === 'object' ? data.seenSpecials : {};
             this.unlockedThemes = { classic: true, ...(data.unlockedThemes || {}) };
             const d = data.daily && typeof data.daily === 'object' ? data.daily : {};
             this.daily = {
@@ -774,7 +729,6 @@ export class GridShiftMain {
                 theme: this.theme,
                 unlockedThemes: this.unlockedThemes,
                 tutorialDone: this.tutorialDone,
-                seenSpecials: this.seenSpecials,
                 daily: this.daily
             }));
         } catch (error) {
@@ -785,7 +739,6 @@ export class GridShiftMain {
     update(delta) {
         this.clock += delta;
         this.statusTimer = Math.max(0, this.statusTimer - delta);
-        this.checkSpecialTips();
         this.shakeTimer = Math.max(0, this.shakeTimer - delta);
         this.flashTimer = Math.max(0, this.flashTimer - delta);
         for (const [key, animation] of this.snapAnimations) {
