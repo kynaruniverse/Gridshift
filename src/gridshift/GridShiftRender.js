@@ -64,6 +64,7 @@ export const renderMethods = {
         c.save();
         if (this.screen === 'game') this.renderGame();
         else if (this.screen === 'locker') this.renderLocker();
+        else if (this.screen === 'draft') this.renderDraft();
         else this.renderHome();
         if (this.modal) this.renderModal();
         c.restore();
@@ -1162,6 +1163,21 @@ export const renderMethods = {
     },
 
     // ---------------------------------------------------------------- locker
+    renderDraft() {
+        const p = this.palette();
+        this.drawButton('back_home', { x: 18, y: 18, width: 120, height: 60 }, 'BACK', p.panel, 'secondary', 20);
+        this.title('PICK A BOON', W / 2, 150, 60, p.gold, true);
+        this.display('It changes the rules for this run only.', W / 2, 220, 20, p.muted, 'center', 640);
+        (this.draftOffer || []).forEach((boon, i) => {
+            const r = { x: 58, y: 290 + i * 250, width: 604, height: 220 };
+            this.panel(r, p.panel, 28, true);
+            this.buttonHits['draft_pick' + i] = r;
+            this.display(boon.name.toUpperCase(), W / 2, r.y + 70, 36, p.ink, 'center', 560);
+            this.text(boon.text, W / 2, r.y + 138, 20, p.ink, 800, 'center', 540);
+        });
+        this.drawButton('draft_skip', { x: 210, y: 1090, width: 300, height: 76 }, 'NO BOON', p.panel, 'secondary', 22);
+    },
+
     renderLocker() {
         const c = this.ctx, p = this.palette();
         this.drawButton('back_home', { x: 18, y: 18, width: 120, height: 60 }, 'BACK', p.panel, 'secondary', 20);

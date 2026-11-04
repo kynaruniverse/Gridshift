@@ -9,6 +9,14 @@ export const BOONS = [
     { id: 'overdrive', name: 'Long Overdrive', text: 'Surges hold x8 for 5 placements.', rules: { overdriveMoves: 5 } }
 ];
 
+// Offers n different boons, chosen with the given random function.
+export function drawBoons(rand = Math.random, n = 3) {
+    const pool = [...BOONS];
+    const out = [];
+    while (out.length < n && pool.length) out.push(pool.splice(Math.floor(rand() * pool.length), 1)[0]);
+    return out;
+}
+
 export function findBoon(id) {
     return BOONS.find(boon => boon.id === id) || null;
 }

@@ -5,7 +5,7 @@ import {
 } from './GridShiftContracts.js';
 import { findTheme, findSkin, isUnlocked, newlyUnlocked, unlockLabel } from './GridShiftUnlocks.js';
 import { mulberry32 } from './GridShiftRng.js';
-import { rulesForBoons } from './GridShiftBoons.js';
+import { rulesForBoons, drawBoons } from './GridShiftBoons.js';
 import { pushPraise } from './GridShiftPraise.js';
 import { PROFILE_VERSION, migrateProfile } from './GridShiftProfile.js';
 
@@ -402,13 +402,15 @@ export class GridShiftMain {
         }
         if (this.modal) {
             if (name === 'modal_resume') this.modal = '';
-            if (name === 'modal_restart') { this.bankRunIfAbandoned(); this.startRun(this.mode); }
+            if (name === 'modal_restart') { this.bankRunIfAbandoned(); this.openDraft(this.mode); }
             if (name === 'modal_home') { this.bankRunIfAbandoned(); this.goHome(); }
             if (name === 'modal_share') this.shareDaily();
             return;
         }
-        if (name === 'start_shift') this.startRun('shift');
-        else if (name === 'start_classic') this.startRun('classic');
+        if (name === 'start_shift') this.openDraft('shift');
+        else if (name === 'start_classic') this.openDraft('classic');
+        else if (name.startsWith('draft_pick')) this.startRun(this.draftMode, [this.draftOffer[+name.slice(10)].id]);
+        else if (name === 'draft_skip') this.startRun(this.draftMode, []);
         else if (name === 'start_daily') this.startRun('daily');
         else if (name === 'open_locker') this.screen = 'locker';
         else if (name === 'tutorial_skip') this.endTutorial();
@@ -497,13 +499,26 @@ export class GridShiftMain {
         else if (this.model.shiftEnabled && this.model.noPieceFits()) this.setStatus('No room! Swipe a row or column to slide it.', 3.2);
     }
 
-    startRun(mode) {
+    // Boon draft: pick 1 of 3 before a Shift or Classic run. Skipped for the Daily, for the
+    // first-time tutorial, and when ?boons= is in the URL.
+    openDraft(mode) {
+        if (mode === 'daily' || (!this.tutorialDone && mode === 'classic') || this.activeBoons().length) {
+            this.startRun(mode);
+            return;
+        }
+        this.draftMode = mode;
+        this.draftOffer = drawBoons(Math.random, 3);
+        this.modal = '';
+        this.screen = 'draft';
+    }
+
+    startRun(mode, picked) {
         this.mode = mode;
         let seed = null;
         let rand = Math.random;
         let scoreScale = 1;
         // The Daily has no boons, so everyone plays identical rules.
-        const rules = mode === 'daily' ? {} : rulesForBoons(this.activeBoons());
+        const rules = mode === 'daily' ? {} : rulesForBoons(picked || this.activeBoons());
         if (mode === 'daily') {
             this.runDailyKey = this.dailyKey();
             seed = GridShiftModel.seedFromString(`gridshift:${this.runDailyKey}`);
