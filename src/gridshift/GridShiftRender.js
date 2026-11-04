@@ -58,12 +58,8 @@ export const renderMethods = {
         c.clearRect(0, 0, W, H);
         this.buttonHits = {};
         this.trayRects = [];
+        this.drawBackdrop(); // never shaken, so the edges can never show an uncovered strip
         c.save();
-        if (this.shakeTimer > 0) {
-            const s = this.shakeIntensity * this.shakeTimer / 0.35;
-            c.translate((Math.random() - 0.5) * s, (Math.random() - 0.5) * s);
-        }
-        this.drawBackdrop();
         if (this.screen === 'game') this.renderGame();
         else if (this.screen === 'locker') this.renderLocker();
         else this.renderHome();
@@ -104,6 +100,129 @@ export const renderMethods = {
         c.fillStyle = HEAT_COLORS[tier];
         c.fillRect(0, 0, W, H);
         c.restore();
+        if (tier >= 3) {
+            // Vignette: the edges darken while the board burns at x8.
+            const v = c.createRadialGradient(W / 2, H / 2, 380, W / 2, H / 2, 860);
+            if (v) {
+                v.addColorStop(0, 'rgba(42,34,64,0)');
+                v.addColorStop(1, 'rgba(42,34,64,0.35)');
+                c.save();
+                c.fillStyle = v;
+                c.fillRect(0, 0, W, H);
+                c.restore();
+            }
+        }
+    },
+
+    // Screen shake is trauma-based: energy squared, smooth sine noise, board layer only.
+    applyShake(b) {
+        const trauma = this.trauma || 0;
+        if (trauma <= 0) return;
+        const c = this.ctx, k = trauma * trauma, t = this.clock;
+        const dx = 22 * k * (Math.sin(t * 31) + Math.sin(t * 47 + 1.3)) / 2;
+        const dy = 22 * k * (Math.sin(t * 37 + 2.1) + Math.sin(t * 53)) / 2;
+        const cx = b.x + b.width / 2, cy = b.y + b.height / 2;
+        c.translate(cx + dx, cy + dy);
+        c.rotate(0.014 * k * Math.sin(t * 41));
+        c.translate(-cx, -cy);
+    },
+
+    glowSprite(tier) {
+        this.glowCache = this.glowCache || {};
+        if (!this.glowCache[tier]) {
+            const oc = document.createElement('canvas');
+            oc.width = 64;
+            oc.height = 64;
+            const g = oc.getContext('2d');
+            const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+            if (grad) {
+                grad.addColorStop(0, HEAT_COLORS[tier]);
+                grad.addColorStop(1, 'rgba(255,255,255,0)');
+                g.fillStyle = grad;
+                g.fillRect(0, 0, 64, 64);
+            }
+            this.glowCache[tier] = oc;
+        }
+        return this.glowCache[tier];
+    },
+
+    // Additive glow under every tile once Heat reaches tier 2.
+    drawBoardGlow(b, tier) {
+        if (tier < 2) return;
+        const c = this.ctx, sprite = this.glowSprite(tier);
+        c.save();
+        c.globalCompositeOperation = 'lighter';
+        c.globalAlpha = 0.18 + 0.08 * Math.sin(this.clock * 6);
+        for (let y = 0; y < 8; y++) {
+            for (let x = 0; x < 8; x++) {
+                if (this.model.board[y][x] < 0) continue;
+                c.drawImage(sprite, b.x + (x - 0.5) * CELL, b.y + (y - 0.5) * CELL, CELL * 2, CELL * 2);
+            }
+        }
+        c.restore();
+    },
+
+    drawExitAnims() {
+        if (!this.snapAnimations) return;
+        for (const anim of this.snapAnimations.values()) {
+            if (!anim.exit) continue;
+            const p = Math.max(0, Math.min(1, anim.elapsed / anim.duration));
+            const e = 1 - Math.pow(1 - p, 3);
+            this.drawTile(anim.fromX + (anim.targetX - anim.fromX) * e, anim.fromY + (anim.targetY - anim.fromY) * e, CELL, anim.color, 1 - p * 0.6);
+        }
+    },
+
+    // Tiles that were just cleared: wait for their turn in the wave, swell, flash white, vanish.
+    drawDyingTiles(b) {
+        const list = this.dyingTiles;
+        if (!list || !list.length) return;
+        const c = this.ctx;
+        for (const d of list) {
+            const px = b.x + d.x * CELL, py = b.y + d.y * CELL;
+            const local = d.age - d.delay;
+            if (local < 0) { this.drawTile(px, py, CELL, d.color); continue; }
+            const p = Math.min(1, local / d.life);
+            const scale = p < 0.3 ? 1 + 0.18 * (p / 0.3) : 1.18 * (1 - (p - 0.3) / 0.7);
+            const size = CELL * Math.max(0, scale);
+            const ox = px + (CELL - size) / 2, oy = py + (CELL - size) / 2;
+            this.drawTile(ox, oy, size, d.color);
+            c.save();
+            c.globalAlpha = Math.max(0, 0.85 * (1 - p));
+            c.fillStyle = '#fff';
+            rr(c, ox + size * 0.06, oy + size * 0.06, size * 0.88, size * 0.88, size * 0.2);
+            c.fill();
+            c.restore();
+        }
+    },
+
+    drawFloaters() {
+        const c = this.ctx;
+        for (const f of this.floaters || []) {
+            const t = f.age / f.life;
+            c.save();
+            c.globalAlpha = t > 0.7 ? 1 - (t - 0.7) / 0.3 : 1;
+            const rise = 40 * (1 - Math.pow(1 - t, 2));
+            const pop = t < 0.15 ? 0.7 + 2 * t : 1;
+            c.translate(f.x, f.y - rise);
+            c.scale(pop, pop);
+            this.title(f.text, 0, 0, 38, HEAT_COLORS[Math.max(1, f.tier)], true);
+            this.display(`\u00d7${f.heat}`, 0, 32, 22, '#fff');
+            c.restore();
+        }
+    },
+
+    drawReturnAnim() {
+        const r = this.returnAnim;
+        if (!r) return;
+        const rect = this.trayRects[r.slot], piece = this.model.tray[r.slot];
+        if (!rect || !piece || piece.used) return;
+        const cols = Math.max(...piece.cells.map(a => a.x)) + 1, rows = Math.max(...piece.cells.map(a => a.y)) + 1;
+        const ts = Math.min(50, 170 / cols, 218 / rows);
+        const tx = rect.x + (rect.width - cols * ts) / 2, ty = rect.y + 24 + (218 - rows * ts) / 2;
+        const t = Math.min(1, r.age / r.dur), e = 1 - Math.pow(1 - t, 3);
+        const size = r.size + (ts - r.size) * e;
+        const left = r.x + (tx - r.x) * e, top = r.y + (ty - r.y) * e;
+        piece.cells.forEach(a => this.drawTile(left + a.x * size, top + a.y * size, size, piece.color));
     },
 
     drawFlash() {
@@ -263,16 +382,16 @@ export const renderMethods = {
     },
 
     // ---------------------------------------------------------------- tiles
-    tileSprite(color, skin = this.tileSkin) {
+    tileSprite(color, skin = this.tileSkin, hot = false) {
         const index = ((color % 6) + 6) % 6;
-        const key = `${skin}:${index}`;
+        const key = `${skin}:${index}${hot ? ':hot' : ''}`;
         this.tileCache = this.tileCache || {};
         if (!this.tileCache[key]) {
             const S = 160, oc = document.createElement('canvas');
             oc.width = S;
             oc.height = S;
             const g = oc.getContext('2d');
-            const bx = 6, by = 4, bw = 148, bh = 138, r = 32, drop = 12;
+            const bx = 6, by = 4, bw = 148, bh = 138, r = skin === 'retro' ? 10 : 32, drop = 12;
             g.fillStyle = INK;
             rr(g, bx, by + drop, bw, bh, r);
             g.fill();
@@ -292,16 +411,49 @@ export const renderMethods = {
             g.strokeStyle = INK;
             rr(g, bx + 5, by + 5, bw - 10, bh - 10, r - 4);
             g.stroke();
+            if (skin === 'candy') {
+                // Glossy: wide highlight plus sprinkles.
+                g.fillStyle = 'rgba(255,255,255,.5)';
+                rr(g, bx + 16, by + 12, bw - 40, 30, 15);
+                g.fill();
+                g.fillStyle = 'rgba(255,255,255,.75)';
+                for (const [sx, sy] of [[bx + 34, by + 74], [bx + bw - 48, by + 92], [bx + 72, by + 108]]) {
+                    g.beginPath();
+                    g.arc(sx, sy, 6, 0, Math.PI * 2);
+                    g.fill();
+                }
+            } else if (skin === 'retro') {
+                // Pixel bevel: light top-left edges, dark bottom-right edges.
+                g.fillStyle = 'rgba(255,255,255,.3)';
+                g.fillRect(bx + 12, by + 12, bw - 24, 12);
+                g.fillRect(bx + 12, by + 12, 12, bh - 24);
+                g.fillStyle = 'rgba(0,0,0,.28)';
+                g.fillRect(bx + 12, by + bh - 24, bw - 24, 12);
+                g.fillRect(bx + bw - 24, by + 12, 12, bh - 24);
+            }
+            if (hot) {
+                g.fillStyle = 'rgba(255,236,170,.22)';
+                rr(g, bx, by, bw, bh, r);
+                g.fill();
+                g.lineWidth = 4;
+                g.strokeStyle = 'rgba(255,214,120,.9)';
+                rr(g, bx + 9, by + 9, bw - 18, bh - 18, Math.max(2, r - 8));
+                g.stroke();
+            }
             this.tileCache[key] = oc;
         }
         return this.tileCache[key];
     },
 
-    drawTile(x, y, size, color, alpha = 1, skin = this.tileSkin) {
+    drawTile(x, y, size, color, alpha = 1, skin = this.tileSkin, hot = false) {
         const c = this.ctx;
+        if (alpha === 1) {
+            c.drawImage(this.tileSprite(color, skin, hot), x, y, size, size);
+            return;
+        }
         c.save();
         c.globalAlpha = alpha;
-        c.drawImage(this.tileSprite(color, skin), x, y, size, size);
+        c.drawImage(this.tileSprite(color, skin, hot), x, y, size, size);
         c.restore();
     },
 
@@ -317,7 +469,7 @@ export const renderMethods = {
             g.fillRect(0, 0, CELL * 8, CELL * 8);
             for (let y = 0; y < 8; y++) {
                 for (let x = 0; x < 8; x++) {
-                    g.fillStyle = ((x + y) & 1) ? p.slotEdge : p.slotEdge;
+                    g.fillStyle = p.slotEdge;
                     g.globalAlpha = ((x + y) & 1) ? 0.55 : 0.8;
                     rr(g, x * CELL + 5, y * CELL + 5, CELL - 10, CELL - 10, 13);
                     g.fill();
@@ -340,7 +492,17 @@ export const renderMethods = {
         const cy = drag.top + rows * drag.size / 2;
         const left = cx - cols * size / 2;
         const top = cy - rows * size / 2;
+        const tilt = Math.max(-0.12, Math.min(0.12, (this.dragVx || 0) * 0.0006));
         c.save();
+        c.translate(cx, cy);
+        c.rotate(tilt);
+        c.translate(-cx, -cy);
+        c.globalAlpha = 0.25;
+        c.fillStyle = INK;
+        drag.piece.cells.forEach(a => {
+            rr(c, left + a.x * size + 4, top + a.y * size + 12, size - 6, size - 6, 14);
+            c.fill();
+        });
         c.globalAlpha = drag.overlapsBoard ? 0.62 : 0.97;
         drag.piece.cells.forEach(a => this.drawTile(left + a.x * size, top + a.y * size, size, drag.piece.color));
         c.restore();
@@ -447,14 +609,29 @@ export const renderMethods = {
         const g = this.shiftGesture;
         if (!g) return;
         const c = this.ctx, p = this.palette(), ready = this.model.shiftCharges > 0;
+        // Preview of the armed slide: green when it would complete a line.
+        if (g.pending && g.previewDir !== g.pending && this.model._shiftedBoard) {
+            g.previewDir = g.pending;
+            const next = this.model._shiftedBoard(g.axis, g.axis === 'row' ? g.cell.y : g.cell.x, g.pending);
+            g.clears = Boolean(next) && (next.some(row => row.every(v => v !== -1))
+                || [0, 1, 2, 3, 4, 5, 6, 7].some(x => next.every(row => row[x] !== -1)));
+        }
         c.save();
         rr(c, b.x, b.y, b.width, b.height, 15);
         c.clip();
-        c.globalAlpha = ready ? 0.8 : 0.4;
-        c.fillStyle = ready ? p.gold : '#FF5A5F';
+        c.globalAlpha = ready ? (g.pending ? 0.9 : 0.8) : 0.4;
+        c.fillStyle = !ready ? '#FF5A5F' : g.pending && g.clears ? '#34D17C' : p.gold;
         if (g.axis !== 'col') c.fillRect(b.x, b.y + g.cell.y * CELL, b.width, CELL);
         if (g.axis !== 'row') c.fillRect(b.x + g.cell.x * CELL, b.y, CELL, b.height);
         c.restore();
+        if (g.pending && g.axis) {
+            const glyph = g.axis === 'row' ? (g.pending > 0 ? '\u25B6' : '\u25C0') : (g.pending > 0 ? '\u25BC' : '\u25B2');
+            for (const f of [0.25, 0.5, 0.75]) {
+                const gx = g.axis === 'row' ? b.x + b.width * f : b.x + (g.cell.x + 0.5) * CELL;
+                const gy = g.axis === 'row' ? b.y + (g.cell.y + 0.5) * CELL : b.y + b.height * f;
+                this.display(glyph, gx, gy, 30, p.ink);
+            }
+        }
     },
 
     // ---------------------------------------------------------------- home
@@ -567,7 +744,13 @@ export const renderMethods = {
         this.drawHeatBackdrop();
         this.panel({ x: 32, y: 18, width: 656, height: 144 }, p.panel, 28, true);
         this.display('SCORE', W / 2, 46, 16, p.muted);
-        this.title(String(this.model.score), W / 2, 86, 54, p.ink);
+        const shown = Number.isFinite(this.displayScore) ? Math.round(this.displayScore) : this.model.score;
+        const pop = 1 + Math.min(0.15, (this.scorePop || 0) * 0.8);
+        c.save();
+        c.translate(W / 2, 86);
+        c.scale(pop, pop);
+        this.title(String(shown), 0, 0, 54, p.ink);
+        c.restore();
         const canUndo = this.model.history.length > 0 && this.undosLeft > 0;
         this.drawButton('pause', { x: 44, y: 32, width: 84, height: 88 }, 'Ⅱ', p.panel, 'secondary', 25);
         this.drawButton('undo_move', { x: 592, y: 32, width: 84, height: 88 }, 'UNDO', p.panel, 'secondary', 15);
@@ -599,6 +782,9 @@ export const renderMethods = {
         }
 
         const b = this.boardRect;
+        const heatTier = this.heatTier(this.model.heat);
+        c.save();
+        this.applyShake(b);
         this.panel({ x: b.x - 13, y: b.y - 13, width: b.width + 26, height: b.height + 26 }, p.panel, 29, true);
         c.fillStyle = p.slot;
         rr(c, b.x, b.y, b.width, b.height, 15);
@@ -608,6 +794,7 @@ export const renderMethods = {
         c.clip();
         this.drawGridCache(b);
         this.drawShiftGesture(b);
+        this.drawBoardGlow(b, heatTier);
         for (let y = 0; y < 8; y++) {
             for (let x = 0; x < 8; x++) {
                 const val = this.model.board[y][x];
@@ -617,16 +804,26 @@ export const renderMethods = {
                 if (anim) {
                     const progress = Math.max(0, Math.min(1, (anim.elapsed - anim.delay) / anim.duration));
                     const t = progress - 1;
-                    const eased = anim.slide ? 1 + t * t * t : 1 + 2.70158 * t * t * t + 1.70158 * t * t;
+                    const eased = anim.slide ? 1 + 2.4 * t * t * t + 1.4 * t * t : 1 + 2.70158 * t * t * t + 1.70158 * t * t;
                     const ax = anim.fromX + (anim.targetX - anim.fromX) * eased;
                     const ay = anim.fromY + (anim.targetY - anim.fromY) * eased;
+                    if (anim.slide && progress < 1) {
+                        // Two fading afterimages trail the sliding tile.
+                        [[0.18, 0.35], [0.36, 0.18]].forEach(([lag, alpha]) => {
+                            const gt = Math.max(0, progress - lag) - 1;
+                            const ge = 1 + 2.4 * gt * gt * gt + 1.4 * gt * gt;
+                            this.drawTile(anim.fromX + (anim.targetX - anim.fromX) * ge, anim.fromY + (anim.targetY - anim.fromY) * ge, CELL, anim.color, alpha);
+                        });
+                    }
                     const size = anim.slide ? CELL : CELL * (0.8 + 0.2 * eased);
                     this.drawTile(ax + (CELL - size) / 2, ay + (CELL - size) / 2, size, anim.color, anim.slide ? 1 : 0.6 + 0.4 * progress);
                 } else {
-                    this.drawTile(px, py, CELL, val);
+                    this.drawTile(px, py, CELL, val, 1, this.tileSkin, heatTier >= 3);
                 }
             }
         }
+        this.drawExitAnims();
+        this.drawDyingTiles(b);
         c.restore();
         this.drawHeatMeter(b);
 
@@ -634,6 +831,7 @@ export const renderMethods = {
         let dragHint = '';
         if (drag && drag.overlapsBoard) dragHint = this.drawPlacementPreview(drag, b);
         this.drawParticles(b);
+        c.restore(); // end of the shaken board layer
 
         if (!dragHint && this.tutorialStep >= 0 && !(this.statusTimer > 0 && this.statusMessage)) {
             this.drawTutorial(bottom + 40);
@@ -670,12 +868,14 @@ export const renderMethods = {
             const ox = r.x + (r.width - cols * size) / 2;
             const oy = r.y + 24 + (218 - rows * size) / 2;
             c.save();
-            c.globalAlpha = this.dragIndex === i ? 0.28 : 1;
+            c.globalAlpha = this.dragIndex === i ? 0.28 : (this.returnAnim && this.returnAnim.slot === i ? 0 : 1);
             piece.cells.forEach(a => this.drawTile(ox + a.x * size, oy + a.y * size, size, piece.color));
             c.restore();
         }
         this.drawContractChips(1238);
         this.drawPraise();
+        this.drawFloaters();
+        this.drawReturnAnim();
         if (drag) this.drawHeldPiece(drag);
     },
 

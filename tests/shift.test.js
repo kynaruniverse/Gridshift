@@ -174,22 +174,40 @@ test('a short wiggle does not slide anything', () => {
     assert.ok(game.shiftGesture);
 });
 
-test('a horizontal swipe slides the row under the finger once', () => {
+function release(game) {
+    game.screen = 'game';
+    GridShiftMain.prototype.pointerUp.call(game, { x: 0, y: 0 });
+}
+
+test('a horizontal swipe arms the row slide and commits it on release, once', () => {
     const game = gestureStub();
     GridShiftMain.prototype.shiftMove.call(game, { x: 120, y: 102 });
     assert.equal(game.shiftGesture.axis, 'row');
     GridShiftMain.prototype.shiftMove.call(game, { x: 150, y: 103 });
+    assert.equal(game.calls.length, 0, 'nothing fires until the finger lifts');
+    assert.equal(game.shiftGesture.pending, 1);
+    release(game);
     assert.deepEqual(game.calls, [['row', 5, 1]]);
     assert.equal(game.shiftGesture, null);
-    GridShiftMain.prototype.shiftMove.call(game, { x: 220, y: 103 });
-    assert.equal(game.calls.length, 1);
 });
 
-test('a vertical swipe upward slides the column under the finger', () => {
+test('a vertical swipe upward commits the column slide on release', () => {
     const game = gestureStub();
     GridShiftMain.prototype.shiftMove.call(game, { x: 102, y: 80 });
     GridShiftMain.prototype.shiftMove.call(game, { x: 103, y: 55 });
+    release(game);
     assert.deepEqual(game.calls, [['col', 2, -1]]);
+});
+
+test('dragging back toward the start cancels an armed slide', () => {
+    const game = gestureStub();
+    GridShiftMain.prototype.shiftMove.call(game, { x: 120, y: 102 });
+    GridShiftMain.prototype.shiftMove.call(game, { x: 150, y: 103 });
+    assert.equal(game.shiftGesture.pending, 1);
+    GridShiftMain.prototype.shiftMove.call(game, { x: 104, y: 103 });
+    assert.equal(game.shiftGesture.pending, 0);
+    release(game);
+    assert.equal(game.calls.length, 0, 'a cancelled slide spends no charge');
 });
 
 test('the board cell under a point is found, and points outside give nothing', () => {

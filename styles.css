@@ -19,6 +19,9 @@ body {
   position: relative;
   width: min(100vw, calc(100vh * 0.5625));
   height: min(100vh, calc(100vw * 1.7777778));
+  /* Mobile browsers: 100dvh excludes the collapsing toolbar, so the bottom row is never clipped. */
+  width: min(100vw, calc(100dvh * 0.5625));
+  height: min(100dvh, calc(100vw * 1.7777778));
   overflow: hidden;
   background: #FFF1D0;
   touch-action: none;

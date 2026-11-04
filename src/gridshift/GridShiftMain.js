@@ -65,6 +65,20 @@ export class GridShiftMain {
         this.shakeIntensity = 0;
         this.snapAnimations = new Map();
         this.particles = [];
+        // View-only effect state (the model never sees any of this).
+        this.endReason = '';
+        this.praise = null;
+        this.trauma = 0;          // 0..1 screen-shake energy, decays in update()
+        this.hitStop = 0;         // seconds of frozen animation after a big clear
+        this.dyingTiles = [];     // cleared tiles that are still playing their exit
+        this.floaters = [];       // floating +score text
+        this.displayScore = 0;    // eased number shown in the HUD
+        this.lastScore = 0;
+        this.scorePop = 0;
+        this.dragVx = 0;
+        this.lastMoveT = 0;
+        this.returnAnim = null;   // piece flying back to the tray after an off-board release
+        this.activePointer = null;
         this.prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches || false;
         this.initCanvasSize();
         this.bindEvents();
@@ -114,21 +128,42 @@ export class GridShiftMain {
                 y: (point.clientY - rect.top) * this.height / rect.height
             };
         };
+        // Only one pointer drives the game at a time, so a second finger cannot hijack a drag.
         this.canvas.addEventListener('pointerdown', (event) => {
             event.preventDefault();
+            if (this.activePointer !== null) return;
+            this.activePointer = event.pointerId;
             this.canvas.setPointerCapture?.(event.pointerId);
             this.canvasRect = null;
+            this.dragVx = 0;
+            this.lastMoveT = event.timeStamp;
             this.pointerDown(getPos(event));
         });
         this.canvas.addEventListener('pointermove', (event) => {
+            if (this.activePointer !== null && event.pointerId !== this.activePointer) return;
+            const previous = this.dragPosition;
             this.dragPosition = getPos(event);
+            const dt = (event.timeStamp - this.lastMoveT) / 1000;
+            if (this.dragIndex >= 0 && dt > 0 && dt < 0.2) {
+                this.dragVx = this.dragVx * 0.6 + ((this.dragPosition.x - previous.x) / dt) * 0.4;
+            }
+            this.lastMoveT = event.timeStamp;
             if (this.shiftGesture) this.shiftMove(this.dragPosition);
         });
         this.canvas.addEventListener('pointerup', (event) => {
             event.preventDefault();
+            if (event.pointerId !== this.activePointer) return;
+            this.activePointer = null;
             this.pointerUp(getPos(event));
         });
-        this.canvas.addEventListener('pointercancel', () => { this.dragIndex = -1; this.shiftGesture = null; });
+        this.canvas.addEventListener('pointercancel', (event) => {
+            if (event.pointerId !== this.activePointer) return;
+            this.activePointer = null;
+            this.dragIndex = -1;
+            this.shiftGesture = null;
+        });
+        // Closing the tab mid-run still banks the score.
+        window.addEventListener('pagehide', () => this.bankRunIfAbandoned());
         window.addEventListener('resize', () => this.initCanvasSize());
     }
 
@@ -166,14 +201,16 @@ export class GridShiftMain {
         }
         if (!g.axis) return;
         const travel = g.axis === 'row' ? dx : dy;
-        if (Math.abs(travel) < SHIFT_FIRE_PX) return;
-        this.shiftGesture = null;
-        this.performShift(g.axis, g.axis === 'row' ? g.cell.y : g.cell.x, travel > 0 ? 1 : -1);
+        // Past SHIFT_FIRE_PX the slide is armed and previewed; it commits on release and
+        // cancels if the finger comes back, so a sloppy drag no longer burns a charge.
+        if (Math.abs(travel) >= SHIFT_FIRE_PX) g.pending = travel > 0 ? 1 : -1;
+        else if (Math.abs(travel) < SHIFT_FIRE_PX * 0.5) g.pending = 0;
     }
 
     performShift(axis, index, dir) {
         const statsBefore = { linesCleared: this.stats.linesCleared, maxCombo: this.stats.maxCombo, contracts: snapshotProgress(this.contracts) };
         const tierBefore = this.heatTier(this.model.heat);
+        const scoreBefore = this.model.score;
         const outcome = this.model.shiftLine(axis, index, dir);
         if (!outcome.ok) {
             this.audio.playInvalid();
@@ -183,7 +220,7 @@ export class GridShiftMain {
             return false;
         }
         this.audio.unlockAndPlay();
-        this.audio.playPlacement();
+        if (this.audio.playSlide) this.audio.playSlide(); else this.audio.playPlacement();
         this.statHistory.push(statsBefore);
         const excess = this.statHistory.length - this.model.history.length;
         if (excess > 0) this.statHistory.splice(0, excess);
@@ -191,6 +228,18 @@ export class GridShiftMain {
         const step = this.cellSize;
         for (const move of outcome.moved) {
             if (this.model.board[move.toY][move.toX] === -1) continue; // cleared by the slide
+            const wrapped = Math.abs(move.toX - move.fromX) > 1 || Math.abs(move.toY - move.fromY) > 1;
+            if (wrapped) {
+                // The tile leaving one edge slides out while its twin slides in from the other edge.
+                const outX = this.boardRect.x + move.fromX * step;
+                const outY = this.boardRect.y + move.fromY * step;
+                this.snapAnimations.set(`exit:${move.fromX},${move.fromY}`, {
+                    color: move.color, slide: true, exit: true, elapsed: 0, delay: 0, duration: 0.16,
+                    fromX: outX, fromY: outY,
+                    targetX: outX + (axis === 'row' ? dir * step : 0),
+                    targetY: outY + (axis === 'col' ? dir * step : 0)
+                });
+            }
             const targetX = this.boardRect.x + move.toX * step;
             const targetY = this.boardRect.y + move.toY * step;
             this.snapAnimations.set(`${move.toX},${move.toY}`, {
@@ -198,7 +247,7 @@ export class GridShiftMain {
                 slide: true,
                 elapsed: 0,
                 delay: 0,
-                duration: 0.11,
+                duration: 0.16,
                 fromX: axis === 'row' ? targetX - dir * step : targetX,
                 fromY: axis === 'col' ? targetY - dir * step : targetY,
                 targetX,
@@ -206,6 +255,7 @@ export class GridShiftMain {
             });
         }
         if (outcome.cleared.length) this.spawnClearParticles(outcome.cleared);
+        this.clearFeedback?.(outcome, outcome.cleared, scoreBefore);
         if (outcome.lines > 0) {
             this.audio.playClear(outcome.combo, outcome.lines);
             this.showPraise(outcome.lines, outcome.combo);
@@ -229,18 +279,38 @@ export class GridShiftMain {
         const rows = Math.max(...piece.cells.map(c => c.y)) + 1;
         const left = this.dragPosition.x - (cols * size) / 2;
         const top = this.dragPosition.y - this.dragLift - rows * size;
-        const origin = {
-            x: Math.round((left - this.boardRect.x) / size),
-            y: Math.round((top - this.boardRect.y) / size)
-        };
+        const origin = this.resolveOrigin(piece.cells, (left - this.boardRect.x) / size, (top - this.boardRect.y) / size);
         const overlapsBoard = piece.cells.some(c =>
             origin.x + c.x >= 0 && origin.x + c.x < 8 && origin.y + c.y >= 0 && origin.y + c.y < 8);
         return { piece, size, left, top, origin, overlapsBoard };
     }
 
+    // Rounds the dragged position to a board cell. If that spot is illegal, snaps to the
+    // nearest legal origin within one cell, so a drop that is a hair off still lands.
+    resolveOrigin(cells, fx, fy) {
+        const base = { x: Math.round(fx), y: Math.round(fy) };
+        if (!Number.isFinite(fx) || !Number.isFinite(fy)) return base;
+        if (!this.model?.canPlace || this.model.canPlace(cells, base)) return base;
+        let best = null;
+        let bestDist = Infinity;
+        for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+                const origin = { x: base.x + dx, y: base.y + dy };
+                if (!this.model.canPlace(cells, origin)) continue;
+                const dist = (origin.x - fx) ** 2 + (origin.y - fy) ** 2;
+                if (dist < bestDist) { bestDist = dist; best = origin; }
+            }
+        }
+        return best || base;
+    }
+
     pointerUp(pos) {
         if (this.shiftGesture) {
+            const g = this.shiftGesture;
             this.shiftGesture = null;
+            if (g.pending && g.axis && this.screen === 'game' && !this.modal) {
+                this.performShift(g.axis, g.axis === 'row' ? g.cell.y : g.cell.x, g.pending);
+            }
             return;
         }
         if (this.dragIndex >= 0) {
@@ -250,6 +320,8 @@ export class GridShiftMain {
             this.dragIndex = -1;
             if (this.screen === 'game' && !this.modal && layout && layout.overlapsBoard) {
                 this.placeFromTray(slot, layout.origin, layout);
+            } else if (layout && !this.prefersReducedMotion) {
+                this.returnAnim = { slot, x: layout.left, y: layout.top, size: layout.size, age: 0, dur: 0.12 };
             }
             return;
         }
@@ -285,8 +357,8 @@ export class GridShiftMain {
         }
         if (this.modal) {
             if (name === 'modal_resume') this.modal = '';
-            if (name === 'modal_restart') this.startRun(this.mode);
-            if (name === 'modal_home') this.goHome();
+            if (name === 'modal_restart') { this.bankRunIfAbandoned(); this.startRun(this.mode); }
+            if (name === 'modal_home') { this.bankRunIfAbandoned(); this.goHome(); }
             if (name === 'modal_share') this.shareDaily();
             return;
         }
@@ -339,6 +411,7 @@ export class GridShiftMain {
         const pieceColor = piece?.color ?? 0;
         const statsBefore = { linesCleared: this.stats.linesCleared, maxCombo: this.stats.maxCombo, contracts: snapshotProgress(this.contracts) };
         const tierBefore = this.heatTier(this.model.heat);
+        const scoreBefore = this.model.score;
         const outcome = this.model.placePiece(slot, origin);
         if (!outcome.ok) {
             this.audio.playInvalid();
@@ -356,6 +429,7 @@ export class GridShiftMain {
         this.tutorialAdvance('placed');
         const clearedCells = this.findClearedCells(beforeBoard, placedCells, pieceColor);
         if (clearedCells.length) this.spawnClearParticles(clearedCells);
+        this.clearFeedback?.(outcome, clearedCells, scoreBefore);
         if (outcome.lines > 0) {
             this.audio.playClear(outcome.combo, outcome.lines);
             this.showPraise(outcome.lines, outcome.combo);
@@ -393,6 +467,13 @@ export class GridShiftMain {
         this.undosLeft = 1;
         this.runFinalized = false;
         this.statHistory = [];
+        this.displayScore = 0;
+        this.lastScore = 0;
+        this.trauma = 0;
+        this.hitStop = 0;
+        this.dyingTiles = [];
+        this.floaters = [];
+        this.returnAnim = null;
         this.screen = 'game';
         this.modal = '';
         this.audio.unlockAndPlay();
@@ -406,7 +487,12 @@ export class GridShiftMain {
         }
     }
 
-    finishRun(reason) {
+    // A run left through Pause -> Start over / Home still counts: best score and Daily are saved.
+    bankRunIfAbandoned() {
+        if (this.screen === 'game' && !this.runFinalized && this.model.score > 0) this.finishRun('quit', true);
+    }
+
+    finishRun(reason, silent = false) {
         if (this.runFinalized) return;
         this.runFinalized = true;
         if (this.tutorialStep >= 0) this.endTutorial();
@@ -415,7 +501,7 @@ export class GridShiftMain {
         if (this.mode === 'daily') this.recordDaily();
 
         this.saveProfile();
-        this.modal = 'results';
+        if (!silent) this.modal = 'results';
         this.endReason = reason;
         this.audio.setHeat(1);
     }
@@ -571,8 +657,10 @@ export class GridShiftMain {
         this.audio.setHeat(this.model.heat);
         if (outcome.surge) {
             this.praise = { text: `SURGE ×${outcome.heat_before}!`, start: this.clock };
-            this.flashTimer = 0.35;
+            this.flashTimer = this.prefersReducedMotion ? 0 : 0.35;
             this.triggerShake(0.4, 16);
+            this.triggerHitStop?.(0.16);
+            this.audio.playSurge?.();
             this.vibrate([30, 30, 30, 30, 90]);
             return;
         }
@@ -722,26 +810,105 @@ export class GridShiftMain {
     }
 
     update(delta) {
-        this.clock += delta;
+        // Hit-stop freezes animation (not input or the HUD easing) for a few frames after a big clear.
+        const live = this.hitStop > 0 ? 0 : delta;
+        this.hitStop = Math.max(0, this.hitStop - delta);
+        if (this.modal !== 'paused') this.clock += live;
         this.statusTimer = Math.max(0, this.statusTimer - delta);
         this.shakeTimer = Math.max(0, this.shakeTimer - delta);
         this.flashTimer = Math.max(0, this.flashTimer - delta);
+        this.trauma = Math.max(0, (this.trauma || 0) - delta * 1.6);
+        this.dragVx = (this.dragVx || 0) * Math.exp(-delta * 8);
+
+        const target = this.model.score;
+        if (target !== this.lastScore) this.scorePop = 0.18;
+        this.lastScore = target;
+        this.scorePop = Math.max(0, (this.scorePop || 0) - delta);
+        if (!Number.isFinite(this.displayScore)) this.displayScore = target;
+        this.displayScore += (target - this.displayScore) * (1 - Math.exp(-12 * delta));
+        if (Math.abs(target - this.displayScore) < 1) this.displayScore = target;
+
         for (const [key, animation] of this.snapAnimations) {
-            animation.elapsed += delta;
+            animation.elapsed += live;
             if (animation.elapsed >= animation.delay + animation.duration) this.snapAnimations.delete(key);
         }
-        for (const particle of this.particles) {
-            particle.age += delta;
-            particle.x += particle.vx * delta;
-            particle.y += particle.vy * delta;
-            particle.vy += particle.gravity * delta;
-            particle.vx *= Math.pow(0.94, delta * 60);
+        if (this.returnAnim) {
+            this.returnAnim.age += live;
+            if (this.returnAnim.age >= this.returnAnim.dur) this.returnAnim = null;
         }
-        this.particles = this.particles.filter(particle => particle.age < particle.life);
+        // In-place compaction: no new arrays every frame.
+        const drag = Math.pow(0.94, live * 60);
+        let kept = 0;
+        for (const particle of this.particles) {
+            particle.age += live;
+            if (particle.age >= particle.life) continue;
+            particle.x += particle.vx * live;
+            particle.y += particle.vy * live;
+            particle.vy += particle.gravity * live;
+            particle.vx *= drag;
+            this.particles[kept++] = particle;
+        }
+        this.particles.length = kept;
+        this.dyingTiles = (this.dyingTiles || []).filter(tile => (tile.age += live) < tile.delay + tile.life);
+        this.floaters = (this.floaters || []).filter(item => (item.age += live) < item.life);
     }
 
+    // Legacy signature kept: duration/intensity map onto trauma (intensity 18 = full).
     triggerShake(duration = 0.3, intensity = 12) {
+        if (this.prefersReducedMotion) return;
         this.shakeTimer = duration;
         this.shakeIntensity = intensity;
+        this.addTrauma(intensity / 18);
+    }
+
+    addTrauma(amount) {
+        if (this.prefersReducedMotion) return;
+        this.trauma = Math.min(1, (this.trauma || 0) + amount);
+    }
+
+    triggerHitStop(seconds) {
+        if (this.prefersReducedMotion) return;
+        this.hitStop = Math.max(this.hitStop || 0, seconds);
+    }
+
+    // One call per clearing move: shake, hit-stop, the wave dissolve and the floating score.
+    clearFeedback(outcome, cells, scoreBefore) {
+        const lines = outcome.lines | 0;
+        if (lines <= 0) return;
+        if (lines === 1) this.addTrauma(0.18);
+        this.triggerHitStop(lines >= 3 ? 0.12 : lines === 2 ? 0.09 : 0.06);
+        this.spawnDyingTiles(cells);
+        const gain = (outcome.score ?? 0) - scoreBefore;
+        if (gain > 0) this.spawnFloater(gain, cells);
+    }
+
+    cellsCentroid(cells) {
+        let sx = 0, sy = 0;
+        for (const cell of cells) { sx += cell.x; sy += cell.y; }
+        return { x: sx / cells.length, y: sy / cells.length };
+    }
+
+    // Cleared tiles leave the model instantly, so the view keeps them alive for a short
+    // dissolve that ripples outward from the middle of the clear (22 ms per cell of distance).
+    spawnDyingTiles(cells) {
+        if (this.prefersReducedMotion || !cells?.length) return;
+        const mid = this.cellsCentroid(cells);
+        for (const cell of cells.slice(0, 64)) {
+            const dist = Math.hypot(cell.x - mid.x, cell.y - mid.y);
+            this.dyingTiles.push({ x: cell.x, y: cell.y, color: cell.color, age: 0, delay: dist * 0.022, life: 0.17 });
+        }
+    }
+
+    spawnFloater(gain, cells) {
+        if (!cells?.length || !this.boardRect) return;
+        const mid = this.cellsCentroid(cells);
+        const text = `+${String(gain).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`;
+        this.floaters.push({
+            text,
+            x: this.boardRect.x + (mid.x + 0.5) * this.cellSize,
+            y: this.boardRect.y + (mid.y + 0.5) * this.cellSize,
+            age: 0, life: 0.8, heat: this.model.heat, tier: this.heatTier(this.model.heat)
+        });
+        if (this.floaters.length > 6) this.floaters.shift();
     }
 }

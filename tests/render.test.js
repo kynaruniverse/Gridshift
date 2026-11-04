@@ -11,7 +11,8 @@ import { makeContracts } from '../src/gridshift/GridShiftContracts.js';
 function fakeContext() {
     const target = {
         measureText: text => ({ width: String(text).length * 11 }),
-        createLinearGradient: () => ({ addColorStop() {} })
+        createLinearGradient: () => ({ addColorStop() {} }),
+        createRadialGradient: () => ({ addColorStop() {} })
     };
     return new Proxy(target, {
         get: (t, key) => (key in t ? t[key] : () => {}),
