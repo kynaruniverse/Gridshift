@@ -47,7 +47,7 @@ test('trauma stacks, caps at 1, decays, and is ignored under reduced motion', ()
 
 test('a clear spawns a rippling dissolve and a floating score; hit-stop scales with lines', () => {
     const game = Object.assign(Object.create(P), {
-        prefersReducedMotion: false, trauma: 0, hitStop: 0, dyingTiles: [], floaters: [],
+        prefersReducedMotion: false, trauma: 0, hitStop: 0, dyingTiles: [], floaters: [], sweeps: [],
         boardRect: { x: 56, y: 180 }, cellSize: 76, model: { heat: 5 }
     });
     const cells = Array.from({ length: 8 }, (_, x) => ({ x, y: 2, color: 1 }));
@@ -85,4 +85,14 @@ test('a paused game does not advance its clock', () => {
     });
     game.update(0.1);
     assert.equal(game.clock, 5);
+});
+
+test('a clear that completes lines spawns one gold sweep per line', () => {
+    const game = Object.assign(Object.create(P), { prefersReducedMotion: false, sweeps: [] });
+    const row = Array.from({ length: 8 }, (_, x) => ({ x, y: 3, color: 1 }));
+    const col = Array.from({ length: 8 }, (_, y) => ({ x: 6, y, color: 1 }));
+    game.spawnSweeps([...row, ...col]);
+    assert.deepEqual(game.sweeps.map(s => `${s.axis}${s.index}`).sort(), ['col6', 'row3']);
+    game.spawnSweeps([{ x: 0, y: 0, color: 1 }]);
+    assert.equal(game.sweeps.length, 2, 'partial cells make no sweep');
 });

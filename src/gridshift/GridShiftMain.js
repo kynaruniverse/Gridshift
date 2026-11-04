@@ -4,6 +4,10 @@ import {
     makeContracts, updateContracts, seededRandom, snapshotProgress, restoreProgress
 } from './GridShiftContracts.js';
 import { findTheme, findSkin, isUnlocked, newlyUnlocked, unlockLabel } from './GridShiftUnlocks.js';
+import { mulberry32 } from './GridShiftRng.js';
+import { rulesForBoons } from './GridShiftBoons.js';
+import { pushPraise } from './GridShiftPraise.js';
+import { PROFILE_VERSION, migrateProfile } from './GridShiftProfile.js';
 
 const SHIFT_LOCK_PX = 14;  // movement before the swipe picks a row or a column
 const SHIFT_FIRE_PX = 40;  // movement along that line that triggers the slide
@@ -78,6 +82,10 @@ export class GridShiftMain {
         this.dragVx = 0;
         this.lastMoveT = 0;
         this.returnAnim = null;   // piece flying back to the tray after an off-board release
+        this.sweeps = [];         // gold light bars that run along a cleared line
+        this.praiseQueue = [];
+        this.runLog = { mode: 'classic', seed: 0, rules: {}, moves: [] };
+        this.dragOrigin = null;
         this.activePointer = null;
         this.prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches || false;
         this.initCanvasSize();
@@ -174,6 +182,7 @@ export class GridShiftMain {
                 this.dragIndex = slot;
                 this.dragStartClock = this.clock;
                 this.dragPosition = pos;
+                this.dragOrigin = pos;
             } else if (this.model.shiftEnabled) {
                 const cell = this.boardCellAt(pos);
                 if (cell) this.shiftGesture = { startX: pos.x, startY: pos.y, cell, axis: null };
@@ -266,6 +275,7 @@ export class GridShiftMain {
         this.hapticForMove(outcome.lines, outcome.combo);
         this.heatFeedback(outcome, tierBefore);
         if (outcome.shift_gained > 0) this.setStatus('+1 Shift charge', 1.6);
+        this.logMove({ t: 's', axis, index, dir });
         this.recordMove('slide', outcome);
         if (this.model.isStuck()) this.finishRun('stuck');
         return true;
@@ -283,6 +293,34 @@ export class GridShiftMain {
         const overlapsBoard = piece.cells.some(c =>
             origin.x + c.x >= 0 && origin.x + c.x < 8 && origin.y + c.y >= 0 && origin.y + c.y < 8);
         return { piece, size, left, top, origin, overlapsBoard };
+    }
+
+    // Twist boon: a quick tap on a tray piece turns it a quarter. Rotating is free and is not
+    // an Undo step, so it never costs the run's one undo.
+    rotateTray(slot) {
+        if (!this.model.rotatePiece(slot)) return;
+        this.logMove({ t: 'r', slot });
+        this.audio.playButton();
+        this.vibrate(10);
+    }
+
+    // Every move is appended to the run log so a run can be replayed from its seed.
+    logMove(move) {
+        if (this.runLog) this.runLog.moves.push(move);
+    }
+
+    exportRun() {
+        return JSON.parse(JSON.stringify(this.runLog));
+    }
+
+    // Boons for this run come from ?boons=twist,furnace until the draft screen exists.
+    activeBoons() {
+        try {
+            const value = new URLSearchParams(globalThis.location?.search || '').get('boons');
+            return value ? value.split(',').map(id => id.trim()).filter(Boolean) : [];
+        } catch (error) {
+            return [];
+        }
     }
 
     // Rounds the dragged position to a board cell. If that spot is illegal, snaps to the
@@ -315,6 +353,13 @@ export class GridShiftMain {
         }
         if (this.dragIndex >= 0) {
             const slot = this.dragIndex;
+            const isTap = this.dragOrigin && Math.hypot(pos.x - this.dragOrigin.x, pos.y - this.dragOrigin.y) < 14
+                && this.clock - this.dragStartClock < 0.3;
+            if (isTap && this.model.rules?.rotate && this.screen === 'game' && !this.modal) {
+                this.dragIndex = -1;
+                this.rotateTray(slot);
+                return;
+            }
             this.dragPosition = pos;
             const layout = this.dragLayout();
             this.dragIndex = -1;
@@ -395,6 +440,7 @@ export class GridShiftMain {
                 restoreProgress(this.contracts, previous.contracts);
             }
             this.undosLeft--;
+            this.logMove({ t: 'u' });
             this.audio.playUndo();
             this.vibrate(40);
             this.setStatus('Move undone. No undos left this run.', 1.8);
@@ -445,6 +491,7 @@ export class GridShiftMain {
         this.hapticForMove(outcome.lines, outcome.combo);
         this.heatFeedback(outcome, tierBefore);
         if (outcome.shift_gained > 0) this.setStatus('+1 Shift charge', 1.6);
+        this.logMove({ t: 'p', slot, x: origin.x, y: origin.y });
         this.recordMove('place', outcome);
         if (this.model.isStuck()) this.finishRun('stuck');
         else if (this.model.shiftEnabled && this.model.noPieceFits()) this.setStatus('No room! Swipe a row or column to slide it.', 3.2);
@@ -454,14 +501,26 @@ export class GridShiftMain {
         this.mode = mode;
         let seed = null;
         let rand = Math.random;
+        let scoreScale = 1;
+        // The Daily has no boons, so everyone plays identical rules.
+        const rules = mode === 'daily' ? {} : rulesForBoons(this.activeBoons());
         if (mode === 'daily') {
             this.runDailyKey = this.dailyKey();
             seed = GridShiftModel.seedFromString(`gridshift:${this.runDailyKey}`);
             rand = seededRandom(GridShiftModel.seedFromString(`contracts:${this.runDailyKey}`));
+        } else {
+            // Every run is seeded, so any run can be replayed from its log.
+            seed = (Math.random() * 4294967296) >>> 0;
+            this.model.rng = mulberry32(seed);
+            // Score contracts follow the player: harder as the best score for this mode grows.
+            const best = this.bestScores[mode] || 0;
+            if (best > 0) scoreScale = Math.min(2.5, Math.max(0.6, best / 8000));
         }
         // The Daily plays by Shift rules, with the same pieces and contracts for everyone.
-        this.model.reset(mode === 'classic' ? 'classic' : 'shift', seed);
-        this.contracts = makeContracts(mode === 'classic' ? 'classic' : 'shift', rand);
+        const modelMode = mode === 'classic' ? 'classic' : 'shift';
+        this.model.reset(modelMode, mode === 'daily' ? seed : null, rules);
+        this.runLog = { mode, seed, rules, moves: [] };
+        this.contracts = makeContracts(modelMode, rand, scoreScale);
         this.runStars = 0;
         this.newUnlocks = [];
         this.undosLeft = 1;
@@ -473,6 +532,9 @@ export class GridShiftMain {
         this.hitStop = 0;
         this.dyingTiles = [];
         this.floaters = [];
+        this.sweeps = [];
+        this.praise = null;
+        this.praiseQueue = [];
         this.returnAnim = null;
         this.screen = 'game';
         this.modal = '';
@@ -656,7 +718,8 @@ export class GridShiftMain {
     heatFeedback(outcome, tierBefore) {
         this.audio.setHeat(this.model.heat);
         if (outcome.surge) {
-            this.praise = { text: `SURGE ×${outcome.heat_before}!`, start: this.clock };
+            pushPraise(this, `SURGE ×${outcome.heat_before}!`);
+            if (outcome.overdrive > 0) this.setStatus?.(`OVERDRIVE: ×${outcome.heat_before} holds for ${outcome.overdrive} moves`, 2.2);
             this.flashTimer = this.prefersReducedMotion ? 0 : 0.35;
             this.triggerShake(0.4, 16);
             this.triggerHitStop?.(0.16);
@@ -666,7 +729,7 @@ export class GridShiftMain {
         }
         const tier = this.heatTier(this.model.heat);
         if (tier > tierBefore && outcome.lines > 0) {
-            this.praise = { text: `HEAT ×${this.model.heat}`, start: this.clock };
+            pushPraise(this, `HEAT ×${this.model.heat}`);
         } else if (tier < tierBefore) {
             this.setStatus('Heat cooling down. Clear a line to build it back.', 1.8);
         }
@@ -760,7 +823,11 @@ export class GridShiftMain {
         try {
             const raw = localStorage.getItem('gridshift_profile');
             if (!raw) return;
-            const data = JSON.parse(raw);
+            const { data, migrated } = migrateProfile(JSON.parse(raw));
+            if (migrated) {
+                // Keep the old save once, in case the new version needs to be rolled back.
+                try { localStorage.setItem('gridshift_profile_v1_backup', raw); } catch (error) { /* storage full */ }
+            }
             this.muted = Boolean(data.muted);
             const best = data.bestScores || {};
             this.bestScores = {
@@ -795,6 +862,7 @@ export class GridShiftMain {
     saveProfile() {
         try {
             localStorage.setItem('gridshift_profile', JSON.stringify({
+                version: PROFILE_VERSION,
                 muted: this.muted,
                 bestScores: this.bestScores,
                 stats: this.stats,
@@ -851,6 +919,7 @@ export class GridShiftMain {
         this.particles.length = kept;
         this.dyingTiles = (this.dyingTiles || []).filter(tile => (tile.age += live) < tile.delay + tile.life);
         this.floaters = (this.floaters || []).filter(item => (item.age += live) < item.life);
+        this.sweeps = (this.sweeps || []).filter(item => (item.age += live) < item.life);
     }
 
     // Legacy signature kept: duration/intensity map onto trauma (intensity 18 = full).
@@ -878,6 +947,7 @@ export class GridShiftMain {
         if (lines === 1) this.addTrauma(0.18);
         this.triggerHitStop(lines >= 3 ? 0.12 : lines === 2 ? 0.09 : 0.06);
         this.spawnDyingTiles(cells);
+        this.spawnSweeps(cells);
         const gain = (outcome.score ?? 0) - scoreBefore;
         if (gain > 0) this.spawnFloater(gain, cells);
     }
@@ -897,6 +967,25 @@ export class GridShiftMain {
             const dist = Math.hypot(cell.x - mid.x, cell.y - mid.y);
             this.dyingTiles.push({ x: cell.x, y: cell.y, color: cell.color, age: 0, delay: dist * 0.022, life: 0.17 });
         }
+    }
+
+    // A gold bar runs along every row and column the clear completed.
+    spawnSweeps(cells) {
+        if (this.prefersReducedMotion || !cells?.length) return;
+        const rows = new Array(8).fill(0), cols = new Array(8).fill(0);
+        const seen = new Set();
+        for (const cell of cells) {
+            const key = cell.y * 8 + cell.x;
+            if (seen.has(key)) continue; // a cell can be reported by both a placement and a sweep
+            seen.add(key);
+            rows[cell.y]++;
+            cols[cell.x]++;
+        }
+        for (let i = 0; i < 8; i++) {
+            if (rows[i] === 8) this.sweeps.push({ axis: 'row', index: i, age: 0, life: 0.22 });
+            if (cols[i] === 8) this.sweeps.push({ axis: 'col', index: i, age: 0, life: 0.22 });
+        }
+        if (this.sweeps.length > 8) this.sweeps.splice(0, this.sweeps.length - 8);
     }
 
     spawnFloater(gain, cells) {

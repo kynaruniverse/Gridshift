@@ -22,6 +22,7 @@ function gameStub(extra = {}) {
         model: { heat: 1, score: 0, history: [], undo: () => true },
         audio: { playContract: () => { calls.contractSound++; }, playUndo: noop, unlockAndPlay: noop, setHeat: noop },
         saveProfile: () => { calls.saves++; },
+        logMove: noop,
         vibrate: pattern => calls.vibrate.push(pattern),
         setStatus: message => calls.status.push(message),
         ...extra
@@ -118,6 +119,8 @@ function runStub(day) {
     return gameStub({
         model: new GridShiftModel(),
         dailyKey: () => day,
+        activeBoons: () => [],
+        bestScores: { classic: 0, shift: 0, daily: 0 },
         tutorialDone: true,
         tutorialStep: -1,
         audio: { unlockAndPlay: noop, setHeat: noop }

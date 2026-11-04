@@ -1,3 +1,4 @@
+import { mulberry32 } from './GridShiftRng.js';
 // Contracts: three small goals every run (one easy, one medium, one hard).
 // Finishing one earns stars (1, 2 or 3), and stars unlock looks in the Locker.
 // This file is pure logic with no drawing, so it is easy to test.
@@ -17,20 +18,14 @@ export const CONTRACT_TYPES = {
     surge: { tiers: { 3: 1 }, shiftOnly: false, label: () => 'TRIGGER A SURGE' }
 };
 
-// Small seedable random generator (mulberry32) so the Daily can share its contracts.
+// Small seedable random generator so the Daily can share its contracts (shared mulberry32).
 export function seededRandom(seed) {
-    let state = seed >>> 0;
-    return () => {
-        state = (state + 0x6D2B79F5) >>> 0;
-        let t = state;
-        t = Math.imul(t ^ (t >>> 15), t | 1);
-        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-    };
+    return mulberry32(seed);
 }
 
 // Draws one contract per tier, never repeating a type within a run.
-export function makeContracts(mode, rand = Math.random) {
+// scoreScale stretches only the score contract (1 = the shared defaults, used by the Daily).
+export function makeContracts(mode, rand = Math.random, scoreScale = 1) {
     const slides = mode === 'shift';
     const chosen = [];
     const used = new Set();
@@ -41,7 +36,9 @@ export function makeContracts(mode, rand = Math.random) {
         });
         const type = options[Math.floor(rand() * options.length)];
         used.add(type);
-        chosen.push({ type, tier, stars: tier, target: CONTRACT_TYPES[type].tiers[tier], progress: 0, awarded: false });
+        let target = CONTRACT_TYPES[type].tiers[tier];
+        if (type === 'score' && scoreScale !== 1) target = Math.max(500, Math.round(target * scoreScale / 100) * 100);
+        chosen.push({ type, tier, stars: tier, target, progress: 0, awarded: false });
     }
     return chosen;
 }

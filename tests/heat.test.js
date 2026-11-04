@@ -123,7 +123,7 @@ test('heat never goes above the maximum', () => {
     assert.equal(model.heat, GridShiftModel.HEAT_MAX);
 });
 
-test('at full heat the next clear surges: it sweeps the fullest line and drops heat to five', () => {
+test('at full heat the next clear surges: it sweeps the fullest line and starts Overdrive', () => {
     const model = setup();
     model.heat = 8;
     almostLine(model, 0);            // will clear
@@ -132,7 +132,8 @@ test('at full heat the next clear surges: it sweeps the fullest line and drops h
     assert.equal(result.surge, true);
     assert.equal(result.surge_cells.length, 6);
     assert.ok(model.board[5].every(cell => cell === -1));
-    assert.equal(model.heat, GridShiftModel.HEAT_AFTER_SURGE);
+    assert.equal(model.heat, GridShiftModel.HEAT_MAX, 'heat is held at max during Overdrive');
+    assert.equal(model.overdrive, model.rules.overdriveMoves);
     // one cell (5), 8 + 6 cleared cells (140), one line (100), surge bonus (150), all times eight
     assert.equal(model.score, (5 + 140 + 100 + 150) * 8);
 });
@@ -152,14 +153,15 @@ test('surge does not happen below full heat or without a clear', () => {
     assert.equal(miss.board[5][0], 2);
 });
 
-test('a surge on a nearly empty board still resets heat', () => {
+test('a surge on a nearly empty board still starts Overdrive', () => {
     const model = setup();
     model.heat = 8;
     almostLine(model);
     const result = model.placePiece(0, { x: 7, y: 0 });
     assert.equal(result.surge, true);
     assert.equal(result.surge_cells.length, 0);
-    assert.equal(model.heat, GridShiftModel.HEAT_AFTER_SURGE);
+    assert.equal(model.heat, GridShiftModel.HEAT_MAX);
+    assert.equal(model.overdrive, model.rules.overdriveMoves);
 });
 
 test('a slide can trigger a surge and reports the swept cells', () => {
@@ -174,7 +176,8 @@ test('a slide can trigger a surge and reports the swept cells', () => {
     assert.equal(result.surge, true);
     assert.equal(result.surge_cells.length, 5);
     assert.equal(result.cleared.length, 8 + 5);
-    assert.equal(model.heat, GridShiftModel.HEAT_AFTER_SURGE);
+    assert.equal(model.heat, GridShiftModel.HEAT_MAX);
+    assert.equal(model.overdrive, model.rules.overdriveMoves);
 });
 
 test('undo restores heat and misses', () => {

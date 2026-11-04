@@ -46,3 +46,13 @@ Stars unlock looks only; nothing changes how the game plays.
 - `sw.js`: offline caching. Bump the version in it whenever you ship a change.
 
 The only assets are the app icons, the share image, and the theme music under `assets/`.
+
+## Rules, boons and replays
+
+- **Rules** (`GridShiftRules.js`): every balance number (heat, slide charges, Surge, Overdrive, line bonuses) lives in one object that each run copies, so a boon or a test changes one run only.
+- **Overdrive**: a Surge holds Heat at x8 for the next 2 placements (no cooling, every clear sweeps again), then drops to x6.
+- **Boons** (`GridShiftBoons.js`): small rule patches. Until the draft screen exists, try them with `?boons=twist,furnace` in the URL (not available in the Daily). Twist: tap a tray piece to rotate it.
+- **Replays**: every run is seeded and logs its moves (`game.exportRun()`); `replayRun(log)` in `GridShiftReplay.js` rebuilds the final state, which makes bugs reproducible.
+- **Balance harness**: `npm run sim` plays seeded runs with a greedy bot and compares the current rules with the old ones. Use it after any rule change.
+- **Profile**: saved with a version number; an old save is migrated and the original is kept once under `gridshift_profile_v1_backup`.
+- Adding a file under `src/gridshift/`? Add it to `CORE` in `sw.js` too; a test fails if you forget.

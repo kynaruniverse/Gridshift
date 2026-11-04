@@ -1,3 +1,6 @@
+import { DEFAULT_RULES, makeRules } from './GridShiftRules.js';
+import { rngAdvance, rngValue } from './GridShiftRng.js';
+
 export class GridShiftModel {
     static SIZE = 8;
 
@@ -25,15 +28,16 @@ export class GridShiftModel {
     static SHAPE_WEIGHTS = [3, 5, 5, 5, 6, 4, 4, 4, 3, 3, 2, 2, 2, 4, 2, 2, 2];
 
     // Shift mode: slide a row or column one cell (wrapping) by spending a charge.
-    static SHIFT_START_CHARGES = 1;
-    static SHIFT_MAX_CHARGES = 3;
-    static SHIFT_LINES_PER_CHARGE = 3;
+    // These statics mirror DEFAULT_RULES; a run reads its own copy from this.rules.
+    static SHIFT_START_CHARGES = DEFAULT_RULES.shiftStartCharges;
+    static SHIFT_MAX_CHARGES = DEFAULT_RULES.shiftMaxCharges;
+    static SHIFT_LINES_PER_CHARGE = DEFAULT_RULES.shiftLinesPerCharge;
 
     // Heat: every clear builds a score multiplier, and one free miss is allowed.
-    static HEAT_MAX = 8;
-    static HEAT_GRACE_MISSES = 1;
-    static HEAT_AFTER_SURGE = 5;
-    static SURGE_BONUS = 150;
+    static HEAT_MAX = DEFAULT_RULES.heatMax;
+    static HEAT_GRACE_MISSES = DEFAULT_RULES.heatGraceMisses;
+    static HEAT_AFTER_SURGE = DEFAULT_RULES.heatAfterSurge;
+    static SURGE_BONUS = DEFAULT_RULES.surgeBonus;
 
     // Turns text such as "gridshift:2026-10-31" into a stable 32-bit seed (FNV-1a).
     static seedFromString(text) {
@@ -62,10 +66,14 @@ export class GridShiftModel {
         this.shiftProgress = 0;
         this.heat = 1;
         this.heatMisses = 0;
+        this.overdrive = 0;
+        this.rules = makeRules();
     }
 
 
-    reset(newMode = "classic", seed = null) {
+    reset(newMode = "classic", seed = null, rules = null) {
+        this.rules = makeRules(rules || {});
+        this.overdrive = 0;
         this.mode = newMode;
         this.board = this._emptyBoard(-1);
         this.tray = [];
@@ -77,7 +85,7 @@ export class GridShiftModel {
         this.seedBase = this.seeded ? seed >>> 0 : 0;
         this.trayCount = 0;
         this.shiftEnabled = newMode === 'shift';
-        this.shiftCharges = this.shiftEnabled ? GridShiftModel.SHIFT_START_CHARGES : 0;
+        this.shiftCharges = this.shiftEnabled ? this.rules.shiftStartCharges : 0;
         this.shiftProgress = 0;
         this.heat = 1;
         this.heatMisses = 0;
@@ -116,12 +124,8 @@ export class GridShiftModel {
 
     _random() {
         if (this.seeded) {
-            // mulberry32
-            this.rngState = (this.rngState + 0x6D2B79F5) >>> 0;
-            let t = this.rngState;
-            t = Math.imul(t ^ (t >>> 15), t | 1);
-            t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-            return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+            this.rngState = rngAdvance(this.rngState);
+            return rngValue(this.rngState);
         }
         return (this.rng || Math.random)();
     }
@@ -189,7 +193,8 @@ export class GridShiftModel {
             shiftCharges: this.shiftCharges,
             shiftProgress: this.shiftProgress,
             heat: this.heat,
-            heatMisses: this.heatMisses
+            heatMisses: this.heatMisses,
+            overdrive: this.overdrive
         }));
         if (this.history.length > 5) this.history.shift();
     }
@@ -207,6 +212,7 @@ export class GridShiftModel {
         this.shiftProgress = snapshot.shiftProgress ?? this.shiftProgress;
         this.heat = snapshot.heat ?? this.heat;
         this.heatMisses = snapshot.heatMisses ?? this.heatMisses;
+        this.overdrive = snapshot.overdrive ?? 0;
         return true;
     }
 
@@ -240,11 +246,9 @@ export class GridShiftModel {
         }
 
         const heatBefore = this.heat;
-        const surge = lineCount > 0 && heatBefore >= GridShiftModel.HEAT_MAX;
+        const surge = lineCount > 0 && heatBefore >= this.rules.heatMax;
         const sweep = surge ? this._surgeSweep() : [];
-        let gain = cells.length * 5 + (lineCells + sweep.length) * 10 + lineCount * 100;
-        if (surge) gain += GridShiftModel.SURGE_BONUS;
-        this.score += gain * heatBefore;
+        this._scoreMove(cells.length, lineCount, lineCells, sweep.length, surge, heatBefore);
         this._updateHeat(lineCount, surge);
 
         const shiftGained = this._earnShiftCharges(lineCount);
@@ -268,22 +272,53 @@ export class GridShiftModel {
             heat: this.heat,
             heat_before: heatBefore,
             surge,
-            surge_cells: sweep
+            surge_cells: sweep,
+            overdrive: this.overdrive
         };
+    }
+
+    // One scoring formula for placements and slides (a slide places no cells).
+    _lineBonus(lines) {
+        const table = this.rules.lineBonus;
+        return table[Math.min(lines, table.length - 1)];
+    }
+
+    _scoreMove(placedCells, lines, lineCells, sweepCells, surge, heatBefore) {
+        let gain = placedCells * 5 + (lineCells + sweepCells) * 10 + this._lineBonus(lines);
+        if (surge) gain += this.rules.surgeBonus;
+        this.score += gain * heatBefore;
     }
 
     // Clears build heat (two or more lines at once build it faster). A placement with no
     // clear is a miss: the first one is free, each one after that cools heat by a step.
     // Slides that clear nothing are not counted as misses.
     _updateHeat(lines, surge) {
+        const rules = this.rules;
+        if (surge) {
+            // Overdrive: heat stays at max for the next few placements, so every clear surges again.
+            this.heatMisses = 0;
+            if (rules.overdriveMoves > 0) {
+                this.overdrive = rules.overdriveMoves;
+                this.heat = rules.heatMax;
+            } else {
+                this.heat = rules.heatAfterSurge;
+            }
+            return;
+        }
+        if (this.overdrive > 0) {
+            this.overdrive--;
+            if (this.overdrive === 0) {
+                this.heat = rules.heatAfterSurge;
+                this.heatMisses = 0;
+            }
+            return;
+        }
         if (lines > 0) {
-            this.heat = surge
-                ? GridShiftModel.HEAT_AFTER_SURGE
-                : Math.min(GridShiftModel.HEAT_MAX, this.heat + (lines >= 2 ? 2 : 1));
+            this.heat = Math.min(rules.heatMax, this.heat + (lines >= 2 ? 2 : 1));
             this.heatMisses = 0;
         } else {
             this.heatMisses++;
-            if (this.heatMisses > GridShiftModel.HEAT_GRACE_MISSES) this.heat = Math.max(1, this.heat - 1);
+            if (this.heatMisses > rules.heatGraceMisses) this.heat = Math.max(1, this.heat - 1);
         }
     }
 
@@ -317,14 +352,14 @@ export class GridShiftModel {
         if (!this.shiftEnabled || lines <= 0) return 0;
         this.shiftProgress += lines;
         let gained = 0;
-        while (this.shiftProgress >= GridShiftModel.SHIFT_LINES_PER_CHARGE) {
-            this.shiftProgress -= GridShiftModel.SHIFT_LINES_PER_CHARGE;
-            if (this.shiftCharges < GridShiftModel.SHIFT_MAX_CHARGES) {
+        while (this.shiftProgress >= this.rules.shiftLinesPerCharge) {
+            this.shiftProgress -= this.rules.shiftLinesPerCharge;
+            if (this.shiftCharges < this.rules.shiftMaxCharges) {
                 this.shiftCharges++;
                 gained++;
             }
         }
-        if (this.shiftCharges >= GridShiftModel.SHIFT_MAX_CHARGES) this.shiftProgress = 0;
+        if (this.shiftCharges >= this.rules.shiftMaxCharges) this.shiftProgress = 0;
         return gained;
     }
 
@@ -379,7 +414,7 @@ export class GridShiftModel {
         const linesData = this._clearFullLines();
         const lines = linesData.lines;
         const heatBefore = this.heat;
-        const surge = lines > 0 && heatBefore >= GridShiftModel.HEAT_MAX;
+        const surge = lines > 0 && heatBefore >= this.rules.heatMax;
         const sweep = surge ? this._surgeSweep() : [];
         const cleared = [];
         for (let y = 0; y < size; y++) {
@@ -389,10 +424,11 @@ export class GridShiftModel {
         }
         if (lines > 0) {
             this.combo++;
-            let gain = (linesData.cells + sweep.length) * 10 + lines * 100;
-            if (surge) gain += GridShiftModel.SURGE_BONUS;
-            this.score += gain * heatBefore;
+            this._scoreMove(0, lines, linesData.cells, sweep.length, surge, heatBefore);
             this._updateHeat(lines, surge);
+            // Boons: Furnace adds a heat step, Slingshot refunds the spent charge.
+            if (this.rules.furnace && !surge && this.overdrive === 0) this.heat = Math.min(this.rules.heatMax, this.heat + 1);
+            if (this.rules.slingshot) this.shiftCharges = Math.min(this.rules.shiftMaxCharges, this.shiftCharges + 1);
         }
         const gained = this._earnShiftCharges(lines);
         return {
@@ -408,7 +444,8 @@ export class GridShiftModel {
             heat: this.heat,
             heat_before: heatBefore,
             surge,
-            surge_cells: sweep
+            surge_cells: sweep,
+            overdrive: this.overdrive
         };
     }
 
@@ -469,13 +506,33 @@ export class GridShiftModel {
         return { lines: fullRows.length + fullCols.length, cells: cleared.size };
     }
 
+    // Quarter-turn clockwise, shifted back so the piece starts at (0, 0).
+    static rotateCells(cells) {
+        const rows = Math.max(...cells.map(c => c.y)) + 1;
+        return cells.map(c => ({ x: rows - 1 - c.y, y: c.x }));
+    }
+
+    // Twist boon: rotates a tray piece in place. Free, and deliberately not an Undo step.
+    rotatePiece(slot) {
+        if (!this.rules.rotate || slot < 0 || slot >= this.tray.length) return false;
+        const piece = this.tray[slot];
+        if (piece.used) return false;
+        piece.cells = GridShiftModel.rotateCells(piece.cells);
+        return true;
+    }
+
     canAnyPieceFit() {
         for (const piece of this.tray) {
             if (piece.used) continue;
-            for (let y = 0; y < GridShiftModel.SIZE; y++) {
-                for (let x = 0; x < GridShiftModel.SIZE; x++) {
-                    if (this.canPlace(piece.cells, { x, y })) return true;
+            // With Twist, a piece also fits if any of its four rotations does.
+            let cells = piece.cells;
+            for (let turn = 0; turn < (this.rules.rotate ? 4 : 1); turn++) {
+                for (let y = 0; y < GridShiftModel.SIZE; y++) {
+                    for (let x = 0; x < GridShiftModel.SIZE; x++) {
+                        if (this.canPlace(cells, { x, y })) return true;
+                    }
                 }
+                cells = GridShiftModel.rotateCells(cells);
             }
         }
         return false;

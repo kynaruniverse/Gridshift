@@ -1,9 +1,11 @@
 import { contractLabel, isDone } from './GridShiftContracts.js';
 import { THEMES, SKINS, isUnlocked, nextUnlock, unlockLabel } from './GridShiftUnlocks.js';
+import { nextPraise, pushPraise } from './GridShiftPraise.js';
 
 // GridShift renderer: chunky arcade look.
-// Flat fills, thick dark outlines, hard offset shadows. Nothing is blurred or glowing,
-// and every tile and panel is drawn in code, so the game ships without any image files.
+// Flat fills, thick dark outlines, hard offset shadows. Glow is additive and pre-rendered
+// (no blur filters), and every tile and panel is drawn in code, so the game ships without
+// any image files.
 
 const W = 720, H = 1280, CELL = 76, BOARD_Y = 180;
 const FONT = '"Nunito", system-ui, sans-serif';
@@ -193,6 +195,35 @@ export const renderMethods = {
             c.fill();
             c.restore();
         }
+    },
+
+    // Gold light bars that run along each line a clear completed.
+    drawSweeps(b) {
+        const list = this.sweeps;
+        if (!list || !list.length) return;
+        const c = this.ctx;
+        c.save();
+        c.globalCompositeOperation = 'lighter';
+        for (const s of list) {
+            const p = Math.min(1, s.age / s.life);
+            const eased = 1 - Math.pow(1 - p, 3);
+            const len = (s.axis === 'row' ? b.width : b.height);
+            const head = -0.2 * len + 1.4 * len * eased;
+            const band = len * 0.3;
+            const x0 = s.axis === 'row' ? b.x + head - band : b.x + s.index * CELL;
+            const y0 = s.axis === 'row' ? b.y + s.index * CELL : b.y + head - band;
+            const g = s.axis === 'row'
+                ? c.createLinearGradient(x0, 0, x0 + band, 0)
+                : c.createLinearGradient(0, y0, 0, y0 + band);
+            if (!g) continue;
+            g.addColorStop(0, 'rgba(255,210,63,0)');
+            g.addColorStop(0.7, 'rgba(255,230,140,0.85)');
+            g.addColorStop(1, 'rgba(255,210,63,0)');
+            c.globalAlpha = 1 - p * 0.4;
+            c.fillStyle = g;
+            c.fillRect(x0, y0, s.axis === 'row' ? band : CELL, s.axis === 'row' ? CELL : band);
+        }
+        c.restore();
     },
 
     drawFloaters() {
@@ -536,7 +567,7 @@ export const renderMethods = {
     // ---------------------------------------------------------------- game meters
     drawHeatMeter(b) {
         const c = this.ctx, p = this.palette(), m = this.model;
-        const heat = m.heat, max = m.constructor.HEAT_MAX, tier = this.heatTier(heat), col = HEAT_COLORS[tier];
+        const heat = m.heat, max = m.rules ? m.rules.heatMax : m.constructor.HEAT_MAX, tier = this.heatTier(heat), col = HEAT_COLORS[tier];
         const x = 8, w = 26, y = b.y, h = b.height;
         c.save();
         c.fillStyle = p.ink;
@@ -551,6 +582,21 @@ export const renderMethods = {
             c.fillStyle = col;
             rr(c, x + 4, y + h - 4 - fh, w - 8, fh, 9);
             c.fill();
+            if (m.overdrive > 0) {
+                // Overdrive: the full meter pulses white, one pip per placement left.
+                c.save();
+                c.globalAlpha = 0.25 + 0.2 * Math.sin(this.clock * 14);
+                c.fillStyle = '#fff';
+                rr(c, x + 4, y + h - 4 - fh, w - 8, fh, 9);
+                c.fill();
+                c.restore();
+                c.fillStyle = p.ink;
+                for (let i = 0; i < m.overdrive; i++) {
+                    c.beginPath();
+                    c.arc(x + w / 2, y + h - 16 - i * 14, 3.5, 0, Math.PI * 2);
+                    c.fill();
+                }
+            }
         }
         c.strokeStyle = 'rgba(42,34,64,.35)';
         c.lineWidth = 2;
@@ -824,6 +870,7 @@ export const renderMethods = {
         }
         this.drawExitAnims();
         this.drawDyingTiles(b);
+        this.drawSweeps(b);
         c.restore();
         this.drawHeatMeter(b);
 
@@ -1026,17 +1073,14 @@ export const renderMethods = {
     },
 
     showPraise(lines, combo) {
-        this.praise = {
-            text: combo >= 3 ? `COMBO ×${combo}` : lines >= 4 ? 'INCREDIBLE' : lines === 3 ? 'AMAZING' : lines === 2 ? 'NICE CLEAR' : 'GOOD MOVE',
-            start: this.clock
-        };
+        pushPraise(this, combo >= 3 ? `COMBO ×${combo}` : lines >= 4 ? 'INCREDIBLE' : lines === 3 ? 'AMAZING' : lines === 2 ? 'NICE CLEAR' : 'GOOD MOVE');
     },
 
     drawPraise() {
         if (!this.praise) return;
         const age = this.clock - this.praise.start, life = 0.9;
         if (age >= life) {
-            this.praise = null;
+            nextPraise(this);
             return;
         }
         const scale = age < 0.2 ? 0.7 + age * 2.1 : 1.12 - Math.max(0, age - 0.2) * 0.12;
