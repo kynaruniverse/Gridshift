@@ -12,7 +12,6 @@ export const BOONS = [
 // Offers n different boons, chosen with the given random function.
 export function drawBoons(rand = Math.random, n = 3, skip = []) {
     const pool = BOONS.filter(boon => !skip.includes(boon.id));
-    const pool = [...BOONS];
     const out = [];
     while (out.length < n && pool.length) out.push(pool.splice(Math.floor(rand() * pool.length), 1)[0]);
     return out;
