@@ -5,9 +5,9 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #eff8ff;
-  color: #2A2240;
-  font-family: "Nunito", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #05070F;
+  color: #EAF2FF;
+  font-family: Roboto, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   overscroll-behavior: none;
   -webkit-tap-highlight-color: transparent;
   -webkit-user-select: none;
@@ -17,13 +17,16 @@ body {
 }
 #game-container {
   position: relative;
-  width: min(100vw, calc(100vh * 0.5625));
-  height: min(100vh, calc(100vw * 1.7777778));
+  --sw: calc(100vw - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px));
+  --sh: calc(100vh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+  width: min(var(--sw), calc(var(--sh) * 0.5625));
+  height: min(var(--sh), calc(var(--sw) * 1.7777778));
   /* Mobile browsers: 100dvh excludes the collapsing toolbar, so the bottom row is never clipped. */
-  width: min(100vw, calc(100dvh * 0.5625));
-  height: min(100dvh, calc(100vw * 1.7777778));
+  --sh: calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+  width: min(var(--sw), calc(var(--sh) * 0.5625));
+  height: min(var(--sh), calc(var(--sw) * 1.7777778));
   overflow: hidden;
-  background: #FFF1D0;
+  background: #080C1A;
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;

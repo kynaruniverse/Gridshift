@@ -50,8 +50,8 @@ test('clear particle effects stay capped and become lighter for reduced motion',
         heatTier: GridShiftMain.prototype.heatTier
     };
     call('spawnClearParticles', game, cells);
-    assert.equal(game.particles.length, 60);
-    assert.ok(game.particles.every(p => p.life >= 0.52 && p.life <= 0.70));
+    assert.equal(game.particles.length, 110);
+    assert.ok(game.particles.every(p => p.life >= 0.6 && p.life <= 0.91));
 
     const reduced = {
         particles: [],

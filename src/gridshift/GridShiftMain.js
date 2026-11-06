@@ -5,7 +5,7 @@ import {
 } from './GridShiftContracts.js';
 import { findTheme, findSkin, isUnlocked, newlyUnlocked, unlockLabel } from './GridShiftUnlocks.js';
 import { mulberry32 } from './GridShiftRng.js';
-import { rulesForBoons, drawBoons } from './GridShiftBoons.js';
+import { rulesForBoons, drawBoons, dailyBoon } from './GridShiftBoons.js';
 import { pushPraise } from './GridShiftPraise.js';
 import { PROFILE_VERSION, migrateProfile } from './GridShiftProfile.js';
 
@@ -146,6 +146,7 @@ export class GridShiftMain {
             this.dragVx = 0;
             this.lastMoveT = event.timeStamp;
             this.pointerDown(getPos(event));
+            this.pressedButton = this.buttonAt(getPos(event));
         });
         this.canvas.addEventListener('pointermove', (event) => {
             if (this.activePointer !== null && event.pointerId !== this.activePointer) return;
@@ -162,6 +163,7 @@ export class GridShiftMain {
             event.preventDefault();
             if (event.pointerId !== this.activePointer) return;
             this.activePointer = null;
+            this.pressedButton = '';
             this.pointerUp(getPos(event));
         });
         this.canvas.addEventListener('pointercancel', (event) => {
@@ -169,6 +171,7 @@ export class GridShiftMain {
             this.activePointer = null;
             this.dragIndex = -1;
             this.shiftGesture = null;
+            this.pressedButton = '';
         });
         // Closing the tab mid-run still banks the score.
         window.addEventListener('pagehide', () => this.bankRunIfAbandoned());
@@ -409,17 +412,22 @@ export class GridShiftMain {
         }
         if (name === 'start_shift') this.openDraft('shift');
         else if (name === 'start_classic') this.openDraft('classic');
+        else if (name === 'play_main') this.openDraft(this.homeMode || 'shift');
+        else if (name === 'mode_shift' || name === 'mode_classic') this.homeMode = name.slice(5);
         else if (name.startsWith('draft_pick')) this.startRun(this.draftMode, [this.draftOffer[+name.slice(10)].id]);
         else if (name === 'draft_skip') this.startRun(this.draftMode, []);
         else if (name === 'start_daily') this.startRun('daily');
-        else if (name === 'open_locker') this.screen = 'locker';
+        else if (name === 'open_locker' || name === 'tab_locker') this.screen = 'locker';
+        else if (name === 'tab_home') this.goHome();
+        else if (name === 'tab_daily') this.screen = 'daily';
         else if (name === 'tutorial_skip') this.endTutorial();
         else if (name.startsWith('theme_')) this.equipTheme(name.slice(6));
         else if (name.startsWith('skin_')) this.equipSkin(name.slice(5));
         else if (name === 'back_home') this.goHome();
         else if (name === 'undo_move') {
             this.handleUndo();
-        } else if (name === 'pause') {
+        } else if (name === 'pause' || name === 'contracts_open') {
+            this.modalTitle = name === 'pause' ? '' : 'CONTRACTS';
             this.modal = 'paused';
             this.audio.pauseMusic();
         }
@@ -502,12 +510,13 @@ export class GridShiftMain {
     // Boon draft: pick 1 of 3 before a Shift or Classic run. Skipped for the Daily, for the
     // first-time tutorial, and when ?boons= is in the URL.
     openDraft(mode) {
+        if (mode !== 'daily') this.homeMode = mode;
         if (mode === 'daily' || (!this.tutorialDone && mode === 'classic') || this.activeBoons().length) {
             this.startRun(mode);
             return;
         }
         this.draftMode = mode;
-        this.draftOffer = drawBoons(Math.random, 3);
+        this.draftOffer = drawBoons(Math.random, 3, mode === 'classic' ? ['safetynet', 'twist'] : []);
         this.modal = '';
         this.screen = 'draft';
     }
@@ -517,8 +526,11 @@ export class GridShiftMain {
         let seed = null;
         let rand = Math.random;
         let scoreScale = 1;
-        // The Daily has no boons, so everyone plays identical rules.
-        const rules = mode === 'daily' ? {} : rulesForBoons(picked || this.activeBoons());
+                // The Daily gives everyone the same boon of the day. Classic is "Chill": it forgives two
+        // Heat misses and lets you rotate pieces; a drafted boon stacks on top of that.
+        const rules = mode === 'daily' ? { ...dailyBoon(this.dailyKey()).rules }
+            : mode === 'classic' ? { heatGraceMisses: 2, rotate: true, ...rulesForBoons(picked || this.activeBoons()) }
+            : rulesForBoons(picked || this.activeBoons());
         if (mode === 'daily') {
             this.runDailyKey = this.dailyKey();
             seed = GridShiftModel.seedFromString(`gridshift:${this.runDailyKey}`);
@@ -559,8 +571,10 @@ export class GridShiftMain {
         this.shiftGesture = null;
         if (this.tutorialStep < 0) {
             this.setStatus(mode === 'classic'
-                ? 'Drag pieces onto the board. Finish contracts to earn stars.'
-                : 'Swipe a row or column to slide it. Finish contracts to earn stars.', 3.6);
+                ? 'Chill Classic: tap a piece to rotate it. Heat forgives 2 misses.'
+                : mode === 'daily'
+                    ? `${dailyBoon(this.runDailyKey).name}: ${dailyBoon(this.runDailyKey).text}`
+                    : 'Swipe a row or column to slide it. Finish contracts to earn stars.', 4.2);
         }
     }
 
@@ -574,11 +588,15 @@ export class GridShiftMain {
         this.runFinalized = true;
         if (this.tutorialStep >= 0) this.endTutorial();
 
+        this.newBest = this.model.score > 0 && this.model.score > (this.bestScores[this.mode] || 0);
         this.bestScores[this.mode] = Math.max(this.bestScores[this.mode] || 0, this.model.score);
         if (this.mode === 'daily') this.recordDaily();
 
         this.saveProfile();
-        if (!silent) this.modal = 'results';
+        if (!silent) {
+            this.modal = 'results';
+            this.resultsAt = this.clock;
+        }
         this.endReason = reason;
         this.audio.setHeat(1);
     }
@@ -651,6 +669,10 @@ export class GridShiftMain {
         const today = this.dailyKey();
         const { lastDate, streak } = this.daily;
         return lastDate === today || lastDate === this.dayBefore(today) ? streak : 0;
+    }
+
+    dailyBoonInfo() {
+        return dailyBoon(this.dailyKey());
     }
 
     dailyLabel() {
@@ -736,7 +758,7 @@ export class GridShiftMain {
             pushPraise(this, `SURGE ×${outcome.heat_before}!`);
             if (outcome.overdrive > 0) this.setStatus?.(`OVERDRIVE: ×${outcome.heat_before} holds for ${outcome.overdrive} moves`, 2.2);
             this.flashTimer = this.prefersReducedMotion ? 0 : 0.35;
-            this.triggerShake(0.4, 16);
+            this.triggerShake(0.5, 18);
             this.triggerHitStop?.(0.16);
             this.audio.playSurge?.();
             this.vibrate([30, 30, 30, 30, 90]);
@@ -745,6 +767,7 @@ export class GridShiftMain {
         const tier = this.heatTier(this.model.heat);
         if (tier > tierBefore && outcome.lines > 0) {
             pushPraise(this, `HEAT ×${this.model.heat}`);
+            this.addTrauma?.(0.3);
         } else if (tier < tierBefore) {
             this.setStatus('Heat cooling down. Clear a line to build it back.', 1.8);
         }
@@ -801,13 +824,13 @@ export class GridShiftMain {
     spawnClearParticles(cells) {
         const colors = skinColors(this.tileSkin);
         const tier = this.heatTier(this.model.heat);
-        const count = this.prefersReducedMotion ? 1 : 3 + tier;
-        const room = Math.max(0, 60 + tier * 12 - this.particles.length);
+        const count = this.prefersReducedMotion ? 1 : 5 + tier * 2;
+        const room = Math.max(0, 110 + tier * 20 - this.particles.length);
         const cap = this.particles.length + room;
         for (const cell of cells.slice(0, 24)) {
             for (let i = 0; i < count && this.particles.length < cap; i++) {
                 const angle = Math.random() * Math.PI * 2;
-                const speed = 45 + Math.random() * 115;
+                const speed = 70 + Math.random() * 170;
                 this.particles.push({
                     x: this.boardRect.x + (cell.x + 0.5) * this.cellSize,
                     y: this.boardRect.y + (cell.y + 0.5) * this.cellSize,
@@ -815,8 +838,8 @@ export class GridShiftMain {
                     vy: Math.sin(angle) * speed - 45,
                     gravity: 170,
                     age: 0,
-                    life: this.prefersReducedMotion ? 0.28 : 0.52 + Math.random() * 0.18,
-                    radius: (2 + Math.random() * 3) * (1 + tier * 0.2),
+                    life: this.prefersReducedMotion ? 0.28 : 0.6 + Math.random() * 0.3,
+                    radius: (3 + Math.random() * 4) * (1 + tier * 0.2),
                     color: colors[cell.color % colors.length]
                 });
             }
@@ -959,7 +982,7 @@ export class GridShiftMain {
     clearFeedback(outcome, cells, scoreBefore) {
         const lines = outcome.lines | 0;
         if (lines <= 0) return;
-        if (lines === 1) this.addTrauma(0.18);
+        this.addTrauma(lines === 1 ? 0.25 : 0.2 * lines);
         this.triggerHitStop(lines >= 3 ? 0.12 : lines === 2 ? 0.09 : 0.06);
         this.spawnDyingTiles(cells);
         this.spawnSweeps(cells);

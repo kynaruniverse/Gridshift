@@ -41,7 +41,7 @@ function makeGame(extra = {}) {
 test('the home screen draws and registers every start button', () => {
     const game = makeGame();
     game.render();
-    for (const name of ['start_shift', 'start_classic', 'start_daily', 'open_locker', 'sound_toggle']) {
+    for (const name of ['play_main', 'mode_shift', 'mode_classic', 'tab_home', 'tab_daily', 'tab_locker', 'sound_toggle']) {
         assert.ok(game.buttonHits[name], `${name} is missing`);
     }
 });
@@ -190,4 +190,12 @@ test('the results window shows unlocks and keeps its buttons on screen', () => {
         assert.ok(hit, name);
         assert.ok(hit.y >= 0 && hit.y + hit.height <= 1280, `${name} is on screen`);
     }
+});
+
+test('the daily screen draws and offers the daily start button', () => {
+    const game = makeGame();
+    game.screen = 'daily';
+    game.render();
+    assert.ok(game.buttonHits.start_daily, 'start_daily is missing');
+    assert.ok(game.buttonHits.tab_home, 'tab bar is missing');
 });

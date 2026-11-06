@@ -1,6 +1,7 @@
 import { contractLabel, isDone } from './GridShiftContracts.js';
 import { THEMES, SKINS, isUnlocked, nextUnlock, unlockLabel } from './GridShiftUnlocks.js';
 import { nextPraise, pushPraise } from './GridShiftPraise.js';
+import { drawIcon as drawIconTo } from './GridShiftIcons.js';
 
 // GridShift renderer: chunky arcade look.
 // Flat fills, thick dark outlines, hard offset shadows. Glow is additive and pre-rendered
@@ -8,32 +9,40 @@ import { nextPraise, pushPraise } from './GridShiftPraise.js';
 // any image files.
 
 const W = 720, H = 1280, CELL = 76, BOARD_Y = 180;
-const FONT = '"Nunito", system-ui, sans-serif';
-const DISPLAY_FONT = '"Lilita One", "Baloo 2", "Arial Black", system-ui, sans-serif';
+const FONT = 'Roboto, "Segoe UI", system-ui, "Helvetica Neue", Arial, sans-serif';
+const DISPLAY_FONT = 'Roboto, "Arial Black", system-ui, Arial, sans-serif';
 
 // Tile colour ids 0..5 for each tile skin. Particles in GridShiftMain use the same lists.
 const SKIN_COLORS = {
-    primary: ['#FF5A5F', '#FF9F1C', '#FFD23F', '#34D17C', '#3D8BFF', '#9B5DE5'],
+    primary: ['#FF3D6E', '#FF8A1F', '#FFE81F', '#2BFF9A', '#2DA8FF', '#B05CFF'],
     candy: ['#FF6FA5', '#FFA96B', '#FFE066', '#5EDDB1', '#66B8FF', '#B58CFF'],
     retro: ['#E8604C', '#E5A823', '#2E9C8F', '#8E4A7F', '#8A9A3B', '#5E9BC8']
 };
 export const skinColors = id => SKIN_COLORS[id] || SKIN_COLORS.primary;
 const TIER_COLORS = ['', '#34D17C', '#FFD23F', '#FF5A5F'];
 const HEAT_COLORS = ['#3D8BFF', '#FFD23F', '#FF9F1C', '#FF5A5F'];
-const INK = '#2A2240';
+const INK = '#070A16'; // outline and shadow colour; text uses palette .text via tc()
+
+// Lighten (amt > 0) or darken (amt < 0) a #RRGGBB colour. Other colour formats pass through.
+function shade(hex, amt) {
+    if (!/^#[0-9a-f]{6}$/i.test(hex)) return hex;
+    const n = parseInt(hex.slice(1), 16);
+    const mix = (v) => Math.round(amt >= 0 ? v + (255 - v) * amt : v * (1 + amt));
+    return '#' + [n >> 16 & 255, n >> 8 & 255, n & 255].map(v => mix(v).toString(16).padStart(2, '0')).join('');
+}
 
 const PALETTES = {
     classic: {
-        name: 'ARCADE', bg: '#FFF1D0', dots: '#FFE2A3', panel: '#FFFBEF', slot: '#F7E4B9',
-        slotEdge: '#E9D09A', ink: INK, muted: '#85708F', accent: '#34D17C', gold: '#FFD23F'
+        name: 'NEON', bg: '#080C1A', dots: '#111A36', panel: '#131B38', slot: '#0D1430',
+        slotEdge: '#26356B', edge: '#3A55B8', ink: INK, text: '#EAF2FF', muted: '#8C9AC8', accent: '#19F0FF', gold: '#FFE81F'
     },
     vaporwave: {
-        name: 'BERRY', bg: '#FFE0EC', dots: '#FFC6DB', panel: '#FFF8FB', slot: '#FBD5E3',
-        slotEdge: '#EDB4CA', ink: INK, muted: '#8F6A82', accent: '#FF6FA5', gold: '#FFD23F'
+        name: 'BERRY', bg: '#14081F', dots: '#241040', panel: '#25113F', slot: '#1B0B2E',
+        slotEdge: '#4A1F7A', edge: '#A23FE0', ink: INK, text: '#FBEAFF', muted: '#B58AD6', accent: '#FF3DCB', gold: '#FFE81F'
     },
     cyberpunk: {
-        name: 'MINT', bg: '#DDF6E6', dots: '#C2EBD2', panel: '#F9FFFB', slot: '#CBECD8',
-        slotEdge: '#A8D6BC', ink: INK, muted: '#5F8A78', accent: '#2FC9B0', gold: '#FFD23F'
+        name: 'MINT', bg: '#06140F', dots: '#0C2A20', panel: '#0F2A20', slot: '#0A1F18',
+        slotEdge: '#1F6B4F', edge: '#25C58A', ink: INK, text: '#E6FFF3', muted: '#7FC4A5', accent: '#2BFF9A', gold: '#FFE81F'
     }
 };
 
@@ -52,6 +61,9 @@ const easeInOut = t => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 
 
 export const renderMethods = {
     palette() { return PALETTES[this.theme] || PALETTES.classic; },
+    // Callers pass p.ink for text; map it to the light text colour. Other colours pass through.
+    tc(color) { const p = this.palette(); return color === p.ink ? p.text : color; },
+    drawIcon(name, cx, cy, s, color) { drawIconTo(this.ctx, name, cx, cy, s, color); },
     themeName() { return this.palette().name; },
 
     // ---------------------------------------------------------------- frame
@@ -62,14 +74,50 @@ export const renderMethods = {
         this.trayRects = [];
         this.drawBackdrop(); // never shaken, so the edges can never show an uncovered strip
         c.save();
+        // Screens fade and slide up a little when they change.
+        if (this.screen !== this.shownScreen) {
+            this.shownScreen = this.screen;
+            this.screenAt = this.clock;
+        }
+        const fadeT = Math.min(1, (this.clock - (this.screenAt || 0)) / 0.28);
+        if (fadeT < 1 && this.screen !== 'game' && !this.prefersReducedMotion) {
+            const ease = 1 - (1 - fadeT) ** 3;
+            c.globalAlpha = ease;
+            c.translate(0, (1 - ease) * 36);
+        }
         if (this.screen === 'game') this.renderGame();
         else if (this.screen === 'locker') this.renderLocker();
         else if (this.screen === 'draft') this.renderDraft();
+        else if (this.screen === 'daily') this.renderDaily();
         else this.renderHome();
         if (this.modal) this.renderModal();
         c.restore();
+        if (!this.modal && (this.screen === 'home' || this.screen === 'daily' || this.screen === 'locker')) this.drawTabBar();
+        this.drawSplash();
         this.drawFlash();
         if (this.showFps) this.drawFps();
+    },
+
+    // Intro splash: logo pops in, holds, then fades out (about 1.8s). Blocks taps while visible.
+    drawSplash() {
+        const T = 1.8, t = this.clock;
+        if (this.prefersReducedMotion || t >= T) return;
+        this.buttonHits = {};
+        const c = this.ctx, p = this.palette();
+        const fade = t > 1.3 ? 1 - (t - 1.3) / 0.5 : 1;
+        const pop = Math.min(1, t / 0.45), s = 1 + (1 - pop) ** 3 * 0.5;
+        c.save();
+        c.globalAlpha = Math.max(0, fade);
+        c.fillStyle = p.bg;
+        c.fillRect(0, 0, W, H);
+        const colors = skinColors(this.tileSkin), letters = 'GRIDSHIFT';
+        c.translate(W / 2, H / 2 - 40);
+        c.scale(s, s);
+        for (let i = 0; i < letters.length; i++) {
+            const bob = Math.sin(t * 6 + i * 0.7) * 6;
+            this.title(letters[i], (i - 4) * 62, bob, 78, colors[i % 6], true);
+        }
+        c.restore();
     },
 
     drawBackdrop() {
@@ -79,27 +127,53 @@ export const renderMethods = {
             oc.width = W;
             oc.height = H;
             const g = oc.getContext('2d');
-            g.fillStyle = p.bg;
+            const sky = g.createLinearGradient(0, 0, 0, H);
+            sky.addColorStop(0, shade(p.bg, 0.16));
+            sky.addColorStop(1, shade(p.bg, -0.35));
+            g.fillStyle = sky;
             g.fillRect(0, 0, W, H);
-            g.fillStyle = p.dots;
-            for (let y = 0; y < H + 40; y += 44) {
-                for (let x = ((y / 44) % 2) * 22; x < W + 44; x += 44) {
-                    g.beginPath();
-                    g.arc(x, y, 3.5, 0, Math.PI * 2);
-                    g.fill();
-                }
-            }
+            g.strokeStyle = p.dots;
+            g.lineWidth = 2;
+            g.beginPath();
+            for (let i = 0; i <= W; i += 60) { g.moveTo(i, 0); g.lineTo(i, H); }
+            for (let j = 0; j <= H; j += 60) { g.moveTo(0, j); g.lineTo(W, j); }
+            g.stroke();
+            const glow = g.createRadialGradient(W / 2, 560, 60, W / 2, 560, 760);
+            glow.addColorStop(0, p.edge + '40');
+            glow.addColorStop(1, p.edge + '00');
+            g.fillStyle = glow;
+            g.fillRect(0, 0, W, H);
             this.bgCache = { key: this.theme, canvas: oc };
         }
         c.drawImage(this.bgCache.canvas, 0, 0, W, H);
+        // Slowly drifting glow orbs give the background life.
+        if (!this.orb || this.orb.key !== this.theme) {
+            const oc = document.createElement('canvas');
+            oc.width = oc.height = 420;
+            const g = oc.getContext('2d');
+            const gr = g.createRadialGradient(210, 210, 0, 210, 210, 210);
+            gr.addColorStop(0, p.edge + '70');
+            gr.addColorStop(1, p.edge + '00');
+            g.fillStyle = gr;
+            g.fillRect(0, 0, 420, 420);
+            this.orb = { key: this.theme, canvas: oc };
+        }
+        const t = this.prefersReducedMotion ? 0 : this.clock;
+        for (let i = 0; i < 3; i++) {
+            const ox = W / 2 + Math.sin(t * 0.17 + i * 2.1) * 280 - 210;
+            const oy = 240 + i * 380 + Math.cos(t * 0.13 + i * 1.7) * 110 - 210;
+            c.globalAlpha = 0.55;
+            c.drawImage(this.orb.canvas, ox, oy);
+        }
+        c.globalAlpha = 1;
     },
 
     drawHeatBackdrop() {
         const tier = this.heatTier(this.model.heat);
-        if (tier < 2) return;
+        if (tier < 1) return;
         const c = this.ctx;
         c.save();
-        c.globalAlpha = 0.07 + 0.05 * (0.5 + 0.5 * Math.sin(this.clock * (tier === 3 ? 9 : 5)));
+        c.globalAlpha = 0.03 * tier + 0.05 * (0.5 + 0.5 * Math.sin(this.clock * (2 + tier * 2.5)));
         c.fillStyle = HEAT_COLORS[tier];
         c.fillRect(0, 0, W, H);
         c.restore();
@@ -122,11 +196,11 @@ export const renderMethods = {
         const trauma = this.trauma || 0;
         if (trauma <= 0) return;
         const c = this.ctx, k = trauma * trauma, t = this.clock;
-        const dx = 22 * k * (Math.sin(t * 31) + Math.sin(t * 47 + 1.3)) / 2;
-        const dy = 22 * k * (Math.sin(t * 37 + 2.1) + Math.sin(t * 53)) / 2;
+        const dx = 34 * k * (Math.sin(t * 31) + Math.sin(t * 47 + 1.3)) / 2;
+        const dy = 34 * k * (Math.sin(t * 37 + 2.1) + Math.sin(t * 53)) / 2;
         const cx = b.x + b.width / 2, cy = b.y + b.height / 2;
         c.translate(cx + dx, cy + dy);
-        c.rotate(0.014 * k * Math.sin(t * 41));
+        c.rotate(0.022 * k * Math.sin(t * 41));
         c.translate(-cx, -cy);
     },
 
@@ -287,6 +361,7 @@ export const renderMethods = {
         c.save();
         c.textAlign = align;
         c.textBaseline = 'middle';
+        color = this.tc(color);
         c.font = `${weight} ${size}px ${FONT}`;
         if (maxWidth) {
             const w = c.measureText(t).width;
@@ -303,6 +378,7 @@ export const renderMethods = {
         c.save();
         c.textAlign = align;
         c.textBaseline = 'middle';
+        color = this.tc(color);
         c.font = `400 ${size}px ${DISPLAY_FONT}`;
         if (maxWidth) {
             const w = c.measureText(t).width;
@@ -310,6 +386,11 @@ export const renderMethods = {
         }
         c.fillStyle = color;
         c.fillText(t, x, y);
+        // Fake-bold stroke so any system font reads as heavy.
+        c.lineJoin = 'round';
+        c.lineWidth = Math.max(1.5, size * 0.07);
+        c.strokeStyle = color;
+        c.strokeText(t, x, y);
         c.restore();
     },
 
@@ -328,8 +409,12 @@ export const renderMethods = {
             c.lineWidth = size * 0.16;
             c.strokeText(t, x, y);
         }
+        fill = this.tc(fill);
         c.fillStyle = fill;
         c.fillText(t, x, y);
+        c.lineWidth = size * 0.05;
+        c.strokeStyle = fill;
+        c.strokeText(t, x, y);
         c.restore();
     },
 
@@ -341,17 +426,72 @@ export const renderMethods = {
             rr(c, r.x, r.y + 7, r.width, r.height, rad);
             c.fill();
         }
-        c.fillStyle = fill;
+        const body = c.createLinearGradient(0, r.y, 0, r.y + r.height);
+        body.addColorStop(0, shade(fill, 0.14));
+        body.addColorStop(1, shade(fill, -0.1));
+        c.fillStyle = body;
         rr(c, r.x, r.y, r.width, r.height, rad);
         c.fill();
         c.lineWidth = lw;
-        c.strokeStyle = p.ink;
+        c.strokeStyle = p.edge;
+        c.shadowColor = p.edge;
+        c.shadowBlur = 16;
         rr(c, r.x + lw / 2, r.y + lw / 2, r.width - lw, r.height - lw, rad);
         c.stroke();
         c.restore();
     },
 
-    drawButton(name, r, label, color = this.palette().accent, kind = 'secondary', fontSize) {
+    // Glossy 3D game button: dark lip underneath, gradient face, bright rim and gloss. The face sinks
+    // while pressed. Pause, undo and sound buttons draw an icon instead of their label.
+    drawButton(name, r, label, color = this.palette().accent, kind = 'secondary', fontSize, icon) {
+        const c = this.ctx, p = this.palette(), depth = 10;
+        this.buttonHits[name] = r;
+        icon = icon || { pause: 'pause', undo_move: 'undo' }[name] || (name === 'sound_toggle' ? (this.muted ? 'sound_off' : 'sound_on') : '');
+        const primary = kind === 'primary';
+        const base = primary ? color : p.edge;
+        const faceH = r.height - depth;
+        const x = r.x, w = r.width, y = r.y + (this.pressedButton === name ? depth - 3 : 0);
+        const rad = Math.min(26, faceH / 2);
+        c.save();
+        c.fillStyle = shade(base, -0.6);
+        if (primary) {
+            c.shadowColor = color;
+            c.shadowBlur = this.pressedButton === name ? 8 : 24;
+        }
+        rr(c, x, r.y + depth, w, faceH, rad);
+        c.fill();
+        c.shadowBlur = 0;
+        const face = c.createLinearGradient(0, y, 0, y + faceH);
+        face.addColorStop(0, shade(base, 0.3));
+        face.addColorStop(0.5, base);
+        face.addColorStop(1, shade(base, -0.22));
+        c.fillStyle = face;
+        rr(c, x, y, w, faceH, rad);
+        c.fill();
+        c.globalAlpha *= 0.7;
+        c.lineWidth = 3;
+        c.strokeStyle = shade(base, 0.55);
+        rr(c, x + 1.5, y + 1.5, w - 3, faceH - 3, rad - 1);
+        c.stroke();
+        c.globalAlpha /= 0.7;
+        const gloss = c.createLinearGradient(0, y, 0, y + faceH * 0.55);
+        gloss.addColorStop(0, 'rgba(255,255,255,.5)');
+        gloss.addColorStop(1, 'rgba(255,255,255,.04)');
+        c.fillStyle = gloss;
+        rr(c, x + 5, y + 4, w - 10, faceH * 0.5, Math.max(4, rad - 4));
+        c.fill();
+        c.restore();
+        const cy = y + faceH / 2 + 1, textColor = primary ? '#04060E' : p.ink;
+        if (icon) {
+            this.drawIcon(icon, x + w / 2, cy, Math.min(faceH * 0.3, 26), this.tc(textColor));
+        } else {
+            const size = Math.round((fontSize || Math.min(27, r.height * 0.36)) * 1.12);
+            this.display(label, x + w / 2, cy, size, textColor, 'center', w - 28);
+        }
+    },
+
+    // Previous flat button (no longer used; safe to delete).
+    drawButtonOld(name, r, label, color = this.palette().accent, kind = 'secondary', fontSize) {
         const c = this.ctx, p = this.palette(), depth = 7, lw = 4;
         this.buttonHits[name] = r;
         const rad = Math.min(22, r.height / 2);
@@ -369,12 +509,14 @@ export const renderMethods = {
             c.fill();
         }
         c.lineWidth = lw;
-        c.strokeStyle = p.ink;
+        c.strokeStyle = kind === 'primary' ? 'rgba(255,255,255,.75)' : p.edge;
+        c.shadowColor = kind === 'primary' ? color : p.edge;
+        c.shadowBlur = kind === 'primary' ? 26 : 12;
         rr(c, r.x + lw / 2, r.y + lw / 2, r.width - lw, faceH - lw, rad);
         c.stroke();
         c.restore();
         const size = Math.round((fontSize || Math.min(27, r.height * 0.36)) * 1.12);
-        this.display(label, r.x + r.width / 2, r.y + faceH / 2 + 1, size, p.ink, 'center', r.width - 28);
+        this.display(label, r.x + r.width / 2, r.y + faceH / 2 + 1, size, kind === 'primary' ? '#04060E' : p.ink, 'center', r.width - 28);
     },
 
     drawPill(x, y, w, h, label, fill = this.palette().panel, color = this.palette().ink) {
@@ -384,7 +526,7 @@ export const renderMethods = {
         rr(c, x, y, w, h, h / 2);
         c.fill();
         c.lineWidth = 3;
-        c.strokeStyle = p.ink;
+        c.strokeStyle = p.edge;
         rr(c, x + 1.5, y + 1.5, w - 3, h - 3, h / 2);
         c.stroke();
         c.restore();
@@ -548,8 +690,7 @@ export const renderMethods = {
             rr(c, rect.x - 10, rect.y - 10, rect.width + 20, rect.height + 20, 20);
             c.clip();
         }
-        c.lineWidth = 2;
-        c.strokeStyle = INK;
+        c.globalCompositeOperation = 'lighter';
         for (const q of this.particles) {
             const life = Math.max(0, 1 - q.age / q.life);
             const r = q.radius * (0.6 + 0.6 * life) + 2;
@@ -558,8 +699,10 @@ export const renderMethods = {
             c.translate(q.x, q.y);
             c.rotate(q.age * 7 + q.x * 0.05);
             c.fillStyle = q.color;
+            c.globalAlpha *= 0.3;
+            c.fillRect(-r * 1.8, -r * 1.8, r * 3.6, r * 3.6);
+            c.globalAlpha /= 0.3;
             c.fillRect(-r, -r, r * 2, r * 2);
-            c.strokeRect(-r, -r, r * 2, r * 2);
             c.restore();
         }
         c.restore();
@@ -569,7 +712,7 @@ export const renderMethods = {
     drawHeatMeter(b) {
         const c = this.ctx, p = this.palette(), m = this.model;
         const heat = m.heat, max = m.rules ? m.rules.heatMax : m.constructor.HEAT_MAX, tier = this.heatTier(heat), col = HEAT_COLORS[tier];
-        const x = 8, w = 26, y = b.y, h = b.height;
+        const x = 6, w = 32, y = b.y, h = b.height;
         c.save();
         c.fillStyle = p.ink;
         rr(c, x, y + 5, w, h, 13);
@@ -599,7 +742,7 @@ export const renderMethods = {
                 }
             }
         }
-        c.strokeStyle = 'rgba(42,34,64,.35)';
+        c.strokeStyle = 'rgba(255,255,255,.18)';
         c.lineWidth = 2;
         for (let i = 1; i < max - 1; i++) {
             const ty = y + h - h * i / (max - 1);
@@ -609,11 +752,13 @@ export const renderMethods = {
             c.stroke();
         }
         c.lineWidth = 4;
-        c.strokeStyle = p.ink;
+        c.strokeStyle = col;
+        c.shadowColor = col;
+        c.shadowBlur = 12 + tier * 8;
         rr(c, x + 2, y + 2, w - 4, h - 4, 12);
         c.stroke();
         c.restore();
-        this.title(`×${heat}`, x + w / 2, y - 11, 20, col, true);
+        this.title(`×${heat}`, x + w / 2, y - 10, 25, col, true);
         if (tier >= 1) {
             c.save();
             c.globalAlpha = 0.55 + 0.4 * Math.sin(this.clock * (4 + tier * 2));
@@ -698,52 +843,105 @@ export const renderMethods = {
             this.title(letters[i], lx + widths[i] / 2, 118 + bob, 86, colors[i % 6], true);
             lx += widths[i];
         }
-        this.display('THE BLOCK PUZZLE WHERE YOU SLIDE THE BOARD', W / 2, 196, 19, p.ink, 'center', 620);
-
-        this.drawButton('sound_toggle', { x: 18, y: 18, width: 104, height: 52 }, this.muted ? 'SOUND OFF' : 'SOUND ON', p.panel, 'secondary', 14);
-        this.drawPill(560, 20, 142, 46, `★ ${this.stars}`, p.panel, p.ink);
-
-        this.drawHero({ x: 48, y: 232, width: 624, height: 292 });
-
-        this.drawButton('start_shift', { x: 58, y: 560, width: 604, height: 94 }, 'PLAY SHIFT', p.accent, 'primary', 36);
-        this.drawButton('start_classic', { x: 58, y: 676, width: 194, height: 74 }, 'CLASSIC', p.panel, 'secondary', 21);
-        this.drawButton('start_daily', { x: 263, y: 676, width: 194, height: 74 }, this.dailyLabel(), p.panel, 'secondary', 18);
-        this.drawButton('open_locker', { x: 468, y: 676, width: 194, height: 74 }, 'LOCKER', p.panel, 'secondary', 21);
-
-        this.display('BEST SCORES', W / 2, 800, 17, p.muted);
-        this.drawPill(58, 820, 190, 48, `SHIFT  ${this.bestScores.shift || 0}`);
-        this.drawPill(265, 820, 190, 48, `CLASSIC  ${this.bestScores.classic || 0}`);
-        this.drawPill(472, 820, 190, 48, `DAILY  ${this.bestScores.daily || 0}`);
-
-        const how = { x: 58, y: 890, width: 604, height: 292 };
-        this.panel(how, p.panel, 28, true);
-        this.display('HOW IT WORKS', W / 2, how.y + 38, 24, p.ink);
-        const rows = [
-            ['DRAG pieces onto the board and fill rows or columns.', colors[3]],
-            ['SWIPE a row or column to slide it. Clear 3 lines for a charge.', colors[4]],
-            ['CLEAR lines back to back to build HEAT up to ×8.', colors[0]],
-            ['FINISH 3 contracts each run to earn ★ and unlock new looks.', colors[2]]
-        ];
-        rows.forEach((row, i) => {
-            const cy = how.y + 90 + i * 52;
-            c.save();
-            c.beginPath();
-            c.arc(how.x + 44, cy, 19, 0, Math.PI * 2);
-            c.fillStyle = row[1];
-            c.fill();
-            c.lineWidth = 4;
-            c.strokeStyle = p.ink;
-            c.stroke();
-            c.restore();
-            this.display(String(i + 1), how.x + 44, cy + 1, 22, i === 3 ? p.ink : '#fff');
-            this.text(row[0], how.x + 78, cy, 17, p.ink, 800, 'left', how.width - 100);
-        });
-
-        const next = nextUnlock(this.stars);
-        this.drawPill(150, 1206, 420, 50, next ? `NEXT: ${unlockLabel(next)}  ·  ${next.stars}★` : 'EVERYTHING UNLOCKED!', p.panel, p.ink);
+        this.drawHomeBody(p, colors);
+        return; // everything below this line in renderHome is the old layout and is now unused
     },
 
 
+    // Top bar for Home and Daily: stars on the left, sound on the right.
+    drawTopBar(p) {
+        this.drawPill(18, 22, 170, 52, `${this.stars}`, p.panel, p.ink);
+        this.drawIcon('star', 50, 48, 15, p.gold);
+        this.drawButton('sound_toggle', { x: 618, y: 14, width: 84, height: 74 }, '', p.panel, 'secondary', 14);
+    },
+
+    // Bottom tab bar: HOME, DAILY, LOCKER. The active tab glows.
+    drawTabBar() {
+        const c = this.ctx, p = this.palette(), y = 1160, h = H - y;
+        c.save();
+        const bar = c.createLinearGradient(0, y, 0, H);
+        bar.addColorStop(0, shade(p.panel, 0.1));
+        bar.addColorStop(1, shade(p.panel, -0.5));
+        c.fillStyle = bar;
+        c.fillRect(0, y, W, h);
+        c.strokeStyle = p.edge;
+        c.lineWidth = 3;
+        c.shadowColor = p.edge;
+        c.shadowBlur = 18;
+        c.beginPath();
+        c.moveTo(0, y + 1.5);
+        c.lineTo(W, y + 1.5);
+        c.stroke();
+        c.restore();
+        [['tab_home', 'home', 'HOME', 'home'], ['tab_daily', 'calendar', 'DAILY', 'daily'], ['tab_locker', 'shirt', 'LOCKER', 'locker']].forEach(([name, icon, label, screen], i) => {
+            const r = { x: i * 240, y, width: 240, height: h };
+            this.buttonHits[name] = r;
+            const cx = r.x + 120, active = this.screen === screen, down = this.pressedButton === name;
+            if (active) {
+                c.save();
+                c.fillStyle = p.accent;
+                c.globalAlpha = 0.16;
+                rr(c, cx - 92, y + 14, 184, 92, 28);
+                c.fill();
+                c.globalAlpha = 1;
+                c.strokeStyle = p.accent;
+                c.lineWidth = 3;
+                c.shadowColor = p.accent;
+                c.shadowBlur = 16;
+                rr(c, cx - 92, y + 14, 184, 92, 28);
+                c.stroke();
+                c.restore();
+            }
+            const col = active ? p.accent : p.muted;
+            this.drawIcon(icon, cx, y + 50 + (down ? 3 : 0), active ? 32 : 28, col);
+            this.display(label, cx, y + 92, 17, col, 'center', 200);
+        });
+    },
+
+    renderDaily() {
+        const p = this.palette(), today = this.dailyKey(), boon = this.dailyBoonInfo();
+        this.drawTopBar(p);
+        this.title('DAILY', W / 2, 150, 64, p.gold, true);
+        this.display('SAME SEED AND BOON FOR EVERYONE TODAY', W / 2, 214, 18, p.muted, 'center', 640);
+        const b = { x: 58, y: 270, width: 604, height: 260 };
+        this.panel(b, p.panel, 28, true);
+        this.display('BOON OF THE DAY', W / 2, b.y + 44, 20, p.muted);
+        this.display(boon.name.toUpperCase(), W / 2, b.y + 118, 46, p.gold, 'center', 560);
+        this.text(boon.text, W / 2, b.y + 190, 22, p.ink, 800, 'center', 540);
+        const s = { x: 58, y: 570, width: 604, height: 210 };
+        this.panel(s, p.panel, 28, true);
+        const claimed = this.dailyClaimed(today), best = this.daily.date === today ? this.daily.best : 0;
+        [['STREAK', `🔥 ${this.currentStreak()}`], ["TODAY'S BEST", String(best)], ['STATUS', claimed ? 'DONE ✓' : 'OPEN']].forEach(([label, value], i) => {
+            const x = 58 + 604 / 6 + i * 604 / 3;
+            this.display(label, x, s.y + 56, 18, p.muted, 'center', 190);
+            this.display(value, x, s.y + 132, 44, p.ink, 'center', 190);
+        });
+        this.drawButton('start_daily', { x: 58, y: 830, width: 604, height: 130 }, claimed ? 'PLAY AGAIN' : 'PLAY DAILY', p.accent, 'primary', 44);
+        this.text('Come back every day to build your streak.', W / 2, 1030, 20, p.muted, 800, 'center', 620);
+    },
+
+    // New home: hero board, mode switch, one big PLAY button and a rotating tip.
+    drawHomeBody(p) {
+        const mode = this.homeMode || 'shift';
+        this.drawTopBar(p);
+        this.display('SLIDE THE BOARD. CHASE THE HEAT.', W / 2, 196, 21, p.accent, 'center', 620);
+        this.drawHero({ x: 48, y: 232, width: 624, height: 340 });
+        this.drawButton('mode_shift', { x: 58, y: 600, width: 296, height: 68 }, 'SHIFT', p.gold, mode === 'shift' ? 'primary' : 'secondary', 22);
+        this.drawButton('mode_classic', { x: 366, y: 600, width: 296, height: 68 }, 'CLASSIC', p.gold, mode === 'classic' ? 'primary' : 'secondary', 22);
+        const g = 4 * Math.sin(this.clock * 3);
+        this.drawButton('play_main', { x: 58 - g, y: 700 - g, width: 604 + 2 * g, height: 130 + 2 * g }, `PLAY ${mode.toUpperCase()}`, p.accent, 'primary', 44);
+        this.display(mode === 'shift' ? 'SLIDE ROWS AND COLUMNS TO CLEAR LINES' : 'NO SLIDES. FORGIVING HEAT. TAP TO ROTATE.', W / 2, 872, 17, p.muted, 'center', 620);
+        this.display(`BEST  ${this.bestScores[mode] || 0}`, W / 2, 908, 22, p.muted);
+        const tips = [
+            'DRAG pieces onto the board to fill rows and columns.',
+            'SWIPE a row or column to slide it. 3 lines earn a charge.',
+            'CLEAR lines back to back to build HEAT up to ×8.',
+            'FINISH 3 contracts each run to earn ★ and unlock looks.'
+        ];
+        this.text(tips[Math.floor(this.clock / 4) % tips.length], W / 2, 1000, 20, p.muted, 800, 'center', 620);
+        const next = nextUnlock(this.stars);
+        this.drawPill(150, 1072, 420, 50, next ? `NEXT: ${unlockLabel(next)}  ·  ${next.stars}★` : 'EVERYTHING UNLOCKED!', p.panel, p.ink);
+    },
     // A looping mini board: one row at a time slides a cell, with wraparound.
     drawHero(r) {
         const c = this.ctx, p = this.palette();
@@ -790,7 +988,8 @@ export const renderMethods = {
 
         this.drawHeatBackdrop();
         this.panel({ x: 32, y: 18, width: 656, height: 144 }, p.panel, 28, true);
-        this.display('SCORE', W / 2, 46, 16, p.muted);
+        this.drawIcon('star', W / 2 - 54, 46, 10, p.gold);
+        this.display('SCORE', W / 2 + 6, 46, 16, p.muted);
         const shown = Number.isFinite(this.displayScore) ? Math.round(this.displayScore) : this.model.score;
         const pop = 1 + Math.min(0.15, (this.scorePop || 0) * 0.8);
         c.save();
@@ -803,7 +1002,7 @@ export const renderMethods = {
         this.drawButton('undo_move', { x: 592, y: 32, width: 84, height: 88 }, 'UNDO', p.panel, 'secondary', 15);
         if (!canUndo) {
             c.save();
-            c.fillStyle = 'rgba(42,34,64,.28)';
+            c.fillStyle = 'rgba(0,0,0,.45)';
             rr(c, 592, 32, 84, 81, 22);
             c.fill();
             c.restore();
@@ -820,13 +1019,7 @@ export const renderMethods = {
             c.restore();
             this.display(String(this.undosLeft), 668, 41, 17, p.ink);
         }
-        const best = (this.mode === 'daily' ? this.dailyBestToday() : this.bestScores[this.mode]) || 0;
-        this.drawPill(140, 121, 196, 32, `BEST  ${best}`, p.panel, p.muted);
-        if (this.model.shiftEnabled) {
-            this.drawShiftMeter(376, 119, 230, 36);
-        } else {
-            this.drawPill(396, 121, 196, 32, 'CLASSIC', p.panel, p.ink);
-        }
+        if (this.model.shiftEnabled) this.drawShiftMeter(245, 119, 230, 36);
 
         const b = this.boardRect;
         const heatTier = this.heatTier(this.model.heat);
@@ -886,18 +1079,32 @@ export const renderMethods = {
         } else {
             const hint = this.model.shiftEnabled
                 ? 'Drag pieces in. Swipe a row or column to slide it.'
-                : 'Drag pieces onto the board. Clear lines to make space.';
+                : 'Drag pieces in. Tap a piece to rotate it.';
             this.drawStatus(bottom + 40, dragHint || hint, Boolean(dragHint));
         }
 
         const trayY = 860;
         this.panel({ x: 30, y: trayY, width: 660, height: 360 }, p.panel, 28, true);
+        c.save();
+        c.strokeStyle = p.gold;
+        c.globalAlpha = 0.55;
+        c.lineWidth = 2;
+        rr(c, 40, trayY + 10, 640, 340, 20);
+        c.stroke();
+        c.restore();
         this.display('NEXT PIECES', W / 2, trayY + 32, 20, p.muted);
         for (let i = 0; i < 3; i++) {
             const r = { x: 43 + i * 212, y: trayY + 54, width: 202, height: 276 };
             this.trayRects.push(r);
             c.save();
             c.fillStyle = p.slot;
+            rr(c, r.x, r.y, r.width, r.height, 20);
+            c.fill();
+            const inner = c.createLinearGradient(0, r.y, 0, r.y + r.height);
+            inner.addColorStop(0, 'rgba(0,0,0,.45)');
+            inner.addColorStop(0.18, 'rgba(0,0,0,0)');
+            inner.addColorStop(1, 'rgba(255,255,255,.06)');
+            c.fillStyle = inner;
             rr(c, r.x, r.y, r.width, r.height, 20);
             c.fill();
             c.lineWidth = 3;
@@ -920,14 +1127,56 @@ export const renderMethods = {
             piece.cells.forEach(a => this.drawTile(ox + a.x * size, oy + a.y * size, size, piece.color));
             c.restore();
         }
-        this.drawContractChips(1238);
+        this.drawContractStrip();
         this.drawPraise();
         this.drawFloaters();
         this.drawReturnAnim();
         if (drag) this.drawHeldPiece(drag);
     },
 
-    // One chip per contract along the bottom: fills as you progress, turns green when done.
+    // One slim strip: three progress bars. Tap it to open the contract list.
+    // The strip pulses when a contract is close to done.
+    drawContractStrip() {
+        const c = this.ctx, p = this.palette(), list = this.contracts || [];
+        const r = { x: 30, y: 1228, width: 660, height: 44 };
+        this.buttonHits.contracts_open = r;
+        const doneCount = list.filter(isDone).length;
+        const close = list.some(k => !isDone(k) && k.progress / k.target >= 0.66);
+        c.save();
+        c.fillStyle = p.panel;
+        rr(c, r.x, r.y, r.width, r.height, 22);
+        c.fill();
+        c.lineWidth = 3;
+        c.strokeStyle = close ? p.gold : p.edge;
+        c.shadowColor = close ? p.gold : p.edge;
+        c.shadowBlur = close ? 10 + 10 * Math.sin(this.clock * 8) ** 2 : 8;
+        rr(c, r.x + 1.5, r.y + 1.5, r.width - 3, r.height - 3, 21);
+        c.stroke();
+        c.restore();
+        this.display(`CONTRACTS ${doneCount}/${list.length}`, r.x + 18, r.y + 23, 15, p.muted, 'left', 135);
+        list.forEach((k, i) => {
+            const bx = 190 + i * 150, bw = 140, by = r.y + 15, bh = 14;
+            const done = isDone(k);
+            const age = k.doneAt === undefined ? 9 : this.clock - k.doneAt;
+            const grow = age < 0.6 ? 4 * (1 - age / 0.6) : 0;
+            c.save();
+            c.fillStyle = 'rgba(255,255,255,.16)';
+            rr(c, bx, by, bw, bh, 7);
+            c.fill();
+            const frac = Math.max(0, Math.min(1, k.progress / k.target));
+            if (frac > 0) {
+                c.fillStyle = done ? '#2BFF9A' : TIER_COLORS[k.tier];
+                c.shadowColor = c.fillStyle;
+                c.shadowBlur = done ? 12 : 6;
+                rr(c, bx - grow, by - grow, bw * frac + grow * 2, bh + grow * 2, 7);
+                c.fill();
+            }
+            c.restore();
+        });
+        this.display('TAP ▲', r.x + r.width - 16, r.y + 23, 13, p.muted, 'right');
+    },
+
+    // Old three-chip bar (no longer used; safe to delete).
     drawContractChips(y) {
         const c = this.ctx, p = this.palette();
         (this.contracts || []).forEach((contract, i) => {
@@ -1084,14 +1333,14 @@ export const renderMethods = {
             nextPraise(this);
             return;
         }
-        const scale = age < 0.2 ? 0.7 + age * 2.1 : 1.12 - Math.max(0, age - 0.2) * 0.12;
+        const scale = age < 0.2 ? 0.5 + age * 3.2 : 1.12 - Math.max(0, age - 0.2) * 0.12;
         const alpha = age > 0.62 ? 1 - (age - 0.62) / (life - 0.62) : 1;
         const c = this.ctx;
         c.save();
         c.globalAlpha = alpha;
         c.translate(W / 2, this.boardRect.y + 215 - age * 22);
         c.scale(scale, scale);
-        this.title(this.praise.text, 0, 0, 56, '#FFD23F', true);
+        this.title(this.praise.text, 0, 0, 72, this.praise.text.startsWith('SURGE') ? '#FF3D6E' : this.praise.text.startsWith('COMBO') ? this.palette().accent : '#FFE81F', true);
         c.restore();
     },
 
@@ -1106,10 +1355,18 @@ export const renderMethods = {
         if (this.modal === 'results') height = 640 + (unlocks ? 56 : 0) + (daily ? 100 : 0);
         const r = { x: 72, y: Math.round((H - height) / 2), width: 576, height };
         this.panel(r, p.panel, 36, true);
+        c.save();
+        c.strokeStyle = p.gold;
+        c.globalAlpha = 0.6;
+        c.lineWidth = 3;
+        rr(c, r.x + 12, r.y + 12, r.width - 24, r.height - 24, 26);
+        c.stroke();
+        c.restore();
         this.title(this.modal === 'paused' ? 'TAKE A BREATHER' : 'RUN COMPLETE', W / 2, r.y + 76, 50, p.ink);
         if (this.modal === 'results') {
-            this.display('FINAL SCORE', W / 2, r.y + 136, 20, p.muted);
-            this.title(String(this.model.score), W / 2, r.y + 190, 66, p.accent, true);
+            this.display(this.newBest ? '★ NEW BEST ★' : 'FINAL SCORE', W / 2, r.y + 136, this.newBest ? 24 : 20, this.newBest ? p.gold : p.muted);
+            const countT = Math.min(1, (this.clock - (this.resultsAt || 0)) / 0.9);
+            this.title(String(Math.round(this.model.score * (1 - (1 - countT) ** 3))), W / 2, r.y + 190, 66, p.accent, true);
             this.drawContractRows(r.x + 36, r.y + 244, r.width - 72);
             let cy = r.y + 404;
             this.drawPill(150, cy, 420, 46, this.runStars > 0 ? `+${this.runStars} ★ EARNED  ·  ${this.stars} TOTAL` : `NO STARS THIS RUN  ·  ${this.stars} TOTAL`, p.slot, p.ink);
@@ -1226,7 +1483,7 @@ export const renderMethods = {
         rr(c, area.x, area.y, area.width, area.height, 14);
         c.clip();
         if (kind === 'theme') {
-            const pal = { classic: { bg: '#FFF1D0', slot: '#F7E4B9', edge: '#E9D09A' }, vaporwave: { bg: '#FFE0EC', slot: '#FBD5E3', edge: '#EDB4CA' }, cyberpunk: { bg: '#DDF6E6', slot: '#CBECD8', edge: '#A8D6BC' } }[item.id];
+            const pal = { classic: { bg: '#080C1A', slot: '#0D1430', edge: '#3A55B8' }, vaporwave: { bg: '#14081F', slot: '#1B0B2E', edge: '#A23FE0' }, cyberpunk: { bg: '#06140F', slot: '#0A1F18', edge: '#25C58A' } }[item.id];
             c.fillStyle = pal.bg;
             c.fillRect(area.x, area.y, area.width, area.height);
             for (let gy = 0; gy < 3; gy++) {

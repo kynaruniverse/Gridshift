@@ -1,0 +1,75 @@
+name: Build APK
+on:
+  workflow_dispatch:
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Create Capacitor project
+        run: |
+          mkdir cap && cd cap
+          npm init -y
+          npm i @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6
+          mkdir www
+          cp -r ../index.html ../styles.css ../manifest.json ../src ../assets www/
+          cat > capacitor.config.json <<'JSON'
+          {
+            "appId": "com.kynar.gridshift",
+            "appName": "GridShift",
+            "webDir": "www",
+            "backgroundColor": "#080C1A"
+          }
+          JSON
+          npx cap add android
+      - name: Portrait, fullscreen, notch
+        run: |
+          cd cap/android/app/src/main
+          sed -i '0,/<activity/s//<activity android:screenOrientation="portrait"/' AndroidManifest.xml
+          cat > java/com/kynar/gridshift/MainActivity.java <<'JAVA'
+          package com.kynar.gridshift;
+
+          import android.os.Build;
+          import android.os.Bundle;
+          import android.view.View;
+          import android.view.WindowManager;
+          import com.getcapacitor.BridgeActivity;
+
+          public class MainActivity extends BridgeActivity {
+              @Override
+              public void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  if (Build.VERSION.SDK_INT >= 28) {
+                      getWindow().getAttributes().layoutInDisplayCutoutMode =
+                          WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+                  }
+              }
+
+              @Override
+              public void onWindowFocusChanged(boolean hasFocus) {
+                  super.onWindowFocusChanged(hasFocus);
+                  if (hasFocus) {
+                      getWindow().getDecorView().setSystemUiVisibility(
+                          View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                          | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                          | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                          | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                          | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                          | View.SYSTEM_UI_FLAG_FULLSCREEN);
+                  }
+              }
+          }
+          JAVA
+      - name: Build
+        run: cd cap/android && chmod +x gradlew && ./gradlew assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GridShift-debug-apk
+          path: cap/android/app/build/outputs/apk/debug/app-debug.apk

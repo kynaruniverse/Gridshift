@@ -10,11 +10,19 @@ export const BOONS = [
 ];
 
 // Offers n different boons, chosen with the given random function.
-export function drawBoons(rand = Math.random, n = 3) {
+export function drawBoons(rand = Math.random, n = 3, skip = []) {
+    const pool = BOONS.filter(boon => !skip.includes(boon.id));
     const pool = [...BOONS];
     const out = [];
     while (out.length < n && pool.length) out.push(pool.splice(Math.floor(rand() * pool.length), 1)[0]);
     return out;
+}
+
+// The boon of the day: the same for everyone on a given date key.
+export function dailyBoon(key) {
+    let h = 0;
+    for (const ch of String(key)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+    return BOONS[h % BOONS.length];
 }
 
 export function findBoon(id) {
